@@ -5,30 +5,16 @@ import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import axios from "axios";
 import admin from "firebase-admin";
-import fs from "fs";
 dotenv.config();
 
-// Initialize Firebase Admin with Service Account credentials
+// Initialize Firebase Admin with credentials if available
 if (!admin.apps.length) {
   try {
-    const serviceAccountPath = path.join(process.cwd(), 'serviceAccountKey.json');
-
-    if (fs.existsSync(serviceAccountPath)) {
-      // Load service account key from file
-      const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf-8'));
-      admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount as admin.ServiceAccount),
-        storageBucket: 'gen-lang-client-0425317525.firebasestorage.app'
-      });
-      console.log("[Firebase Admin] Initialized with Service Account ✅");
-    } else {
-      // Fallback to environment variables (for production)
-      admin.initializeApp({
-        projectId: process.env.VITE_FIREBASE_PROJECT_ID || "gen-lang-client-0425317525",
-        storageBucket: process.env.VITE_FIREBASE_STORAGE_BUCKET || "gen-lang-client-0425317525.firebasestorage.app"
-      });
-      console.log("[Firebase Admin] Initialized with environment variables");
-    }
+    admin.initializeApp({
+      projectId: process.env.VITE_FIREBASE_PROJECT_ID || "gen-lang-client-0425317525",
+      storageBucket: process.env.VITE_FIREBASE_STORAGE_BUCKET || "gen-lang-client-0425317525.firebasestorage.app"
+    });
+    console.log("[Firebase Admin] Initialized Successfully");
   } catch (err: any) {
     console.error("[Firebase Admin] Initialization Error:", err.message);
   }
@@ -152,7 +138,7 @@ async function startServer() {
     }
   });
   
-  // Firebase Storage Upload - Server-side upload (no CORS)
+  // Python Image Processing Proxy - Process images and return processed base64
   app.post("/api/storage/upload", async (req, res) => {
     const { base64, path: storagePath } = req.body;
 
@@ -164,13 +150,13 @@ async function startServer() {
     let wasPythonProcessed = false;
 
     try {
-      console.log(`[Storage Upload] Processing image for: ${storagePath || 'temp_gen'}`);
+      console.log(`[Storage Proxy] Processing image for: ${storagePath || 'temp_gen'}`);
 
       // ============================================
-      // ETAPA 1: Python processing (optional)
+      // Tentar processar via Python (opcional)
       // ============================================
       try {
-        console.log("[Storage Upload] Attempting Python image processing...");
+        console.log("[Storage Proxy] Attempting Python image processing...");
         const pythonResponse = await axios.post(
           "http://127.0.0.1:5000/process",
           {
@@ -183,45 +169,22 @@ async function startServer() {
         if (pythonResponse.data.status === "success" && pythonResponse.data.base64) {
           processedBase64 = pythonResponse.data.base64;
           wasPythonProcessed = true;
-          console.log("[Storage Upload] Python processing successful ✅");
+          console.log("[Storage Proxy] Python processing successful ✅");
         }
       } catch (pythonError: any) {
-        console.warn("[Storage Upload] Python offline (usando base64 original):", pythonError.message);
+        // Python falhou ou não está rodando - isso é OK, continua com base64 original
+        console.warn("[Storage Proxy] Python processing failed (usando base64 original):", pythonError.message);
       }
 
-      // ============================================
-      // ETAPA 2: Parse base64 and upload to Firebase via Admin SDK
-      // ============================================
-      const matches = processedBase64.match(/^data:([A-Za-z-+/]+);base64,(.+)$/);
-      if (!matches || matches.length !== 3) {
-        return res.status(400).json({ error: "Invalid base64 format" });
-      }
-
-      const contentType = matches[1];
-      const buffer = Buffer.from(matches[2], 'base64');
-      const filename = `${Date.now()}_${Math.random().toString(36).substring(7)}`;
-      const fullPath = `${storagePath || 'temp_generation'}/${filename}`;
-
-      const bucket = admin.storage().bucket();
-      const file = bucket.file(fullPath);
-
-      console.log("[Storage Upload] Uploading to Firebase via Admin SDK...");
-      await file.save(buffer, {
-        metadata: { contentType },
-        public: true,
-        resumable: false
+      // Retornar base64 processado para cliente fazer upload via Client SDK
+      console.log("[Storage Proxy] Returning processed base64 to client");
+      res.json({
+        base64: processedBase64,
+        processed: wasPythonProcessed,
+        message: "Image processed. Client should upload to Firebase using Client SDK."
       });
-
-      // Return public URL (no CORS needed - server uploaded it)
-      const publicUrl = `https://storage.googleapis.com/${bucket.name}/${fullPath}`;
-      console.log("[Storage Upload] Success ✅:", publicUrl);
-      if (wasPythonProcessed) {
-        console.log("[Storage Upload] ✅ Image was processed by Python");
-      }
-
-      res.json({ url: publicUrl, processed: wasPythonProcessed });
     } catch (error: any) {
-      console.error("[Storage Upload] Error:", error.message);
+      console.error("[Storage Proxy] Processing Error:", error.message);
       res.status(500).json({ error: error.message });
     }
   });
