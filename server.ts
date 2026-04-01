@@ -138,7 +138,7 @@ async function startServer() {
     }
   });
   
-  // Firebase Storage Proxy Upload
+  // Firebase Storage Proxy Upload - with Python processing
   app.post("/api/storage/upload", async (req, res) => {
     const { base64, path: storagePath } = req.body;
 
@@ -146,11 +146,41 @@ async function startServer() {
       return res.status(400).json({ error: "Missing base64 data" });
     }
 
+    let processedBase64 = base64;
+    let wasPythonProcessed = false;
+
     try {
       console.log(`[Storage Proxy] Uploading to: ${storagePath || 'temp_gen'}`);
 
-      // Extract data and mime type
-      const matches = base64.match(/^data:([A-Za-z-+/]+);base64,(.+)$/);
+      // ============================================
+      // ETAPA 1: Tentar processar via Python (opcional)
+      // ============================================
+      try {
+        console.log("[Storage Proxy] Attempting Python image processing...");
+        const pythonResponse = await axios.post(
+          "http://127.0.0.1:5000/process",
+          {
+            base64: base64,
+            filename: `${storagePath || 'temp_generation'}_${Date.now()}.jpg`
+          },
+          { timeout: 10000 }
+        );
+
+        if (pythonResponse.data.status === "success" && pythonResponse.data.base64) {
+          processedBase64 = pythonResponse.data.base64;
+          wasPythonProcessed = true;
+          console.log("[Storage Proxy] Python processing successful ✅");
+        }
+      } catch (pythonError: any) {
+        // Python falhou ou não está rodando - isso é OK, continua com base64 original
+        console.warn("[Storage Proxy] Python processing failed (usando base64 original):", pythonError.message);
+        // Continua com base64 original - não quebra o fluxo
+      }
+
+      // ============================================
+      // ETAPA 2: Extrair tipo MIME e fazer upload ao Firebase
+      // ============================================
+      const matches = processedBase64.match(/^data:([A-Za-z-+/]+);base64,(.+)$/);
       if (!matches || matches.length !== 3) {
         return res.status(400).json({ error: "Invalid base64 format" });
       }
@@ -169,11 +199,14 @@ async function startServer() {
         resumable: false
       });
 
-      // Get Public URL
+      // Get Public URL (storage.googleapis.com é público, sem CORS)
       const publicUrl = `https://storage.googleapis.com/${bucket.name}/${fullPath}`;
       console.log("[Storage Proxy] Upload Success:", publicUrl);
+      if (wasPythonProcessed) {
+        console.log("[Storage Proxy] ✅ Imagem processada por Python e salva em Firebase");
+      }
 
-      res.json({ url: publicUrl });
+      res.json({ url: publicUrl, processed: wasPythonProcessed });
     } catch (error: any) {
       console.error("[Storage Proxy] Upload Error:", error.message);
       res.status(500).json({ error: error.message });
@@ -230,6 +263,67 @@ async function startServer() {
       readStream.pipe(res);
     } catch (error: any) {
       console.error("[Storage Proxy] Download Error:", error.message);
+      if (!res.headersSent) {
+        res.status(500).json({ error: error.message });
+      }
+    }
+  });
+
+  // Cache Local - Serve cached images from /cache/images/
+  app.get("/api/cache/image/:imageId(*)", async (req, res) => {
+    const imageId = req.params.imageId;
+
+    if (!imageId) {
+      return res.status(400).json({ error: "Missing imageId parameter" });
+    }
+
+    try {
+      console.log(`[Cache] Serving image: ${imageId}`);
+
+      const fs = require('fs');
+      const path = require('path');
+
+      // Construct path to cached image
+      const cacheDir = path.join(process.cwd(), 'cache', 'images');
+      const imagePath = path.join(cacheDir, imageId);
+
+      // Security: Prevent path traversal attacks
+      if (!imagePath.startsWith(cacheDir)) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      // Check if file exists
+      if (!fs.existsSync(imagePath)) {
+        console.warn(`[Cache] Image not found: ${imageId}`);
+        return res.status(404).json({ error: "Image not found" });
+      }
+
+      // Get file stats for content length
+      const stats = fs.statSync(imagePath);
+      const contentType = "image/jpeg"; // Cache sempre salva JPEG
+
+      // Set headers (CORS-safe, localhost)
+      res.set({
+        "Content-Type": contentType,
+        "Content-Length": stats.size.toString(),
+        "Cache-Control": "public, max-age=86400", // 24 horas de cache
+        "Access-Control-Allow-Origin": "*"
+      });
+
+      // Stream file to response
+      const readStream = fs.createReadStream(imagePath);
+
+      readStream.on("error", (error: any) => {
+        console.error(`[Cache] Stream Error for ${imageId}:`, error.message);
+        if (!res.headersSent) {
+          res.status(500).json({ error: "Failed to read file" });
+        }
+      });
+
+      readStream.pipe(res);
+      console.log(`[Cache] Served: ${imageId} (${stats.size} bytes)`);
+    } catch (error: any) {
+      console.error("[Cache] Serve Error:", error.message);
       if (!res.headersSent) {
         res.status(500).json({ error: error.message });
       }

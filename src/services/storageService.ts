@@ -391,20 +391,55 @@ export const uploadImage = async (
       const compressedBlob = await compressImage(processedFile);
       const filename = `${sha256}.${processedFile.name.split('.').pop()}`;
       const storagePath = `generation_images/${userId}/${sessionId}/${filename}`;
-      const storageRef = ref(storage, storagePath);
-      const compressedPath = `generation_images/${userId}/${sessionId}/preview_${filename}`;
-      const compressedRef = ref(storage, compressedPath);
-      
-      // Perform uploads
-      const [originalResult, compressedResult] = await Promise.all([
-        uploadBytes(storageRef, processedFile),
-        uploadBytes(compressedRef, compressedBlob)
+
+      // ============================================
+      // UPLOAD VIA PROXY (sem CORS) ao invés de Client SDK
+      // ============================================
+      console.log('[Background] Converting files to base64 for proxy upload...');
+
+      // Converter arquivo original para base64
+      const originalBase64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(processedFile);
+      });
+
+      // Converter arquivo comprimido (Blob) para base64
+      const compressedBase64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(compressedBlob);
+      });
+
+      // Upload via proxy (POST /api/storage/upload)
+      console.log('[Background] Uploading via proxy endpoint...');
+      const uploadPromises = await Promise.all([
+        axios.post('/api/storage/upload', {
+          base64: originalBase64,
+          path: `generation_images/${userId}/${sessionId}`
+        }).catch(err => {
+          console.error('[Background] Original upload failed:', err.message);
+          throw err;
+        }),
+        axios.post('/api/storage/upload', {
+          base64: compressedBase64,
+          path: `generation_images/${userId}/${sessionId}`
+        }).catch(err => {
+          console.error('[Background] Compressed upload failed:', err.message);
+          throw err;
+        })
       ]);
 
-      const [originalUrl, compressedUrl] = await Promise.all([
-        getDownloadURL(originalResult.ref),
-        getDownloadURL(compressedResult.ref)
-      ]);
+      const originalUrl = uploadPromises[0].data.url;
+      const compressedUrl = uploadPromises[1].data.url;
+      const wasProcessedByPython = uploadPromises[0].data.processed || uploadPromises[1].data.processed;
+
+      console.log('[Background] Uploads successful via proxy ✅');
+      if (wasProcessedByPython) {
+        console.log('[Background] Images were processed by Python ✅');
+      }
 
       // Save metadata
       const uploadId = `up_${Date.now()}`;
