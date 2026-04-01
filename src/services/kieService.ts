@@ -342,24 +342,47 @@ const extractContent = (data: any): string => {
 };
 
 export const kieService = {
-  async diagnoseImage(imageBase64: string, sessionId: string): Promise<ScanResult> {
+  async diagnoseImage(imageInput: string, sessionId: string): Promise<ScanResult> {
     const userId = auth.currentUser?.uid;
     if (!userId) throw new Error('AUTH_REQUIRED');
 
     console.log('Starting diagnosis for session:', sessionId);
     const startTime = Date.now();
-    
-    // Ensure imageBase64 is a proper data URL
-    let formattedImage = imageBase64;
-    if (!formattedImage.startsWith('data:')) {
-      formattedImage = `data:image/jpeg;base64,${formattedImage}`;
+
+    // NOVO: Aceitar URLs com/sem credenciais E base64
+    let formattedImage = imageInput;
+    let imageSource = 'unknown';
+
+    // Detectar tipo de input
+    if (imageInput.startsWith('data:image')) {
+      console.log('Input is base64 data URL');
+      formattedImage = imageInput;
+      imageSource = 'base64_direct';
+    } else if (imageInput.startsWith('http://') || imageInput.startsWith('https://')) {
+      console.log('Input is HTTP/HTTPS URL (signed or proxy)');
+      formattedImage = imageInput;
+      imageSource = 'signed_url';
+    } else if (imageInput.startsWith('blob:')) {
+      console.log('Input is blob URL (CORS may fail)');
+      formattedImage = imageInput;
+      imageSource = 'blob_url';
+    } else if (imageInput.includes('firebasestorage')) {
+      console.log('Input contains Firebase URL structure');
+      formattedImage = imageInput;
+      imageSource = 'firebase_url';
+    } else {
+      // Assume it's base64 without prefix
+      console.log('Input appears to be raw base64, adding prefix');
+      formattedImage = `data:image/jpeg;base64,${imageInput}`;
+      imageSource = 'base64_raw';
     }
 
     console.log('Image data format check:', {
       length: formattedImage.length,
       prefix: formattedImage.substring(0, 50),
+      source: imageSource,
       isDataUrl: formattedImage.startsWith('data:'),
-      isBlob: formattedImage.startsWith('blob:')
+      isUrl: formattedImage.startsWith('http')
     });
 
     try {
@@ -382,7 +405,7 @@ export const kieService = {
       }, { timeout: 120000 });
 
       console.log('KIE Gemini API responded successfully. Status:', response.status);
-      
+
       const content = extractContent(response.data);
       if (!content) {
         console.error('Failed to extract content from AI response. Full data:', response.data);
@@ -391,23 +414,24 @@ export const kieService = {
 
       console.log('AI Response Content Length:', content.length);
       const rawJson = parseJsonResponse(content);
-      
+
       // 3. Validate with Zod
       console.log('Validating AI response with Zod...');
       const validatedData = ScanResultSchema.parse(rawJson);
-      
+
       const durationMs = Date.now() - startTime;
       console.log(`Diagnosis completed in ${durationMs}ms`);
 
       // 4. Save to Database (Use setDoc with merge to handle fallback sessions)
       const scanId = `scan_${Date.now()}`;
       console.log('Saving scan results to Firestore...', { scanId, userId, sessionId });
-      
+
       const scanDocData = {
         id: scanId,
         userId: userId, // Explicitly ensure this matches the rule
         sessionId,
         scanData: validatedData,
+        imageSource, // NOVO: Log qual fonte de imagem foi usada
         createdAt: new Date().toISOString()
       };
 
@@ -423,6 +447,7 @@ export const kieService = {
         scanResult: validatedData,
         scanStatus: 'completed',
         scanDurationMs: durationMs,
+        imageSource, // NOVO: Track image source in session
         updatedAt: new Date().toISOString()
       };
 
@@ -436,11 +461,24 @@ export const kieService = {
       return validatedData;
     } catch (err: any) {
       console.error('Diagnosis Error:', err);
+
+      // NOVO: Melhor tratamento de erro
+      const errorMsg = err.message || 'Unknown error during diagnosis';
+      const isNetworkError = errorMsg.includes('network') || errorMsg.includes('TIMEOUT') || errorMsg.includes('401') || errorMsg.includes('403');
+
+      console.error('Error details:', {
+        source: imageSource,
+        isNetworkError,
+        errorMsg
+      });
+
       try {
         setDoc(doc(db, 'generation_sessions', sessionId), {
           userId,
           scanStatus: 'failed',
-          scanErrors: [err.message],
+          scanErrors: [errorMsg],
+          imageSource,
+          failureReason: isNetworkError ? 'network_or_auth' : 'validation_or_ai',
           updatedAt: new Date().toISOString()
         }, { merge: true }).catch(() => {});
       } catch (updateErr) {

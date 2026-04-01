@@ -141,14 +141,14 @@ async function startServer() {
   // Firebase Storage Proxy Upload
   app.post("/api/storage/upload", async (req, res) => {
     const { base64, path: storagePath } = req.body;
-    
+
     if (!base64) {
       return res.status(400).json({ error: "Missing base64 data" });
     }
 
     try {
       console.log(`[Storage Proxy] Uploading to: ${storagePath || 'temp_gen'}`);
-      
+
       // Extract data and mime type
       const matches = base64.match(/^data:([A-Za-z-+/]+);base64,(.+)$/);
       if (!matches || matches.length !== 3) {
@@ -172,10 +172,147 @@ async function startServer() {
       // Get Public URL
       const publicUrl = `https://storage.googleapis.com/${bucket.name}/${fullPath}`;
       console.log("[Storage Proxy] Upload Success:", publicUrl);
-      
+
       res.json({ url: publicUrl });
     } catch (error: any) {
       console.error("[Storage Proxy] Upload Error:", error.message);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Firebase Storage Proxy Download - Resolve CORS issue
+  app.get("/api/storage/download/:path(*)", async (req, res) => {
+    const filePath = req.params.path;
+
+    if (!filePath) {
+      return res.status(400).json({ error: "Missing file path" });
+    }
+
+    try {
+      console.log(`[Storage Proxy] Downloading: ${filePath}`);
+
+      const bucket = admin.storage().bucket();
+      const file = bucket.file(filePath);
+
+      // Check if file exists
+      const [exists] = await file.exists();
+      if (!exists) {
+        console.warn(`[Storage Proxy] File not found: ${filePath}`);
+        return res.status(404).json({ error: "File not found" });
+      }
+
+      // Get file metadata for content type and caching
+      const [metadata] = await file.getMetadata();
+      const contentType = metadata.contentType || "application/octet-stream";
+      const contentLength = metadata.size || 0;
+
+      // Set CORS and cache headers
+      res.set({
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Range",
+        "Content-Type": contentType,
+        "Content-Length": contentLength.toString(),
+        "Cache-Control": "public, max-age=31536000", // 1 year for immutable files
+        "Cross-Origin-Resource-Sharing": "enabled"
+      });
+
+      // Stream file to response
+      const readStream = file.createReadStream();
+
+      readStream.on("error", (error: any) => {
+        console.error(`[Storage Proxy] Stream Error for ${filePath}:`, error.message);
+        if (!res.headersSent) {
+          res.status(500).json({ error: "Failed to read file" });
+        }
+      });
+
+      readStream.pipe(res);
+    } catch (error: any) {
+      console.error("[Storage Proxy] Download Error:", error.message);
+      if (!res.headersSent) {
+        res.status(500).json({ error: error.message });
+      }
+    }
+  });
+
+  // Firebase Storage Generate Signed URL - For authenticated downloads
+  app.post("/api/storage/signed-url", async (req, res) => {
+    const { filePath } = req.body;
+
+    if (!filePath) {
+      return res.status(400).json({ error: "Missing filePath in request body" });
+    }
+
+    try {
+      console.log(`[Storage Proxy] Generating signed URL for: ${filePath}`);
+
+      const bucket = admin.storage().bucket();
+      const file = bucket.file(filePath);
+
+      // Check if file exists
+      const [exists] = await file.exists();
+      if (!exists) {
+        console.warn(`[Storage Proxy] File not found for signed URL: ${filePath}`);
+        return res.status(404).json({ error: "File not found" });
+      }
+
+      // Generate signed URL valid for 1 hour
+      const [signedUrl] = await file.getSignedUrl({
+        version: "v4",
+        action: "read",
+        expires: Date.now() + 60 * 60 * 1000, // 1 hour
+      });
+
+      console.log(`[Storage Proxy] Signed URL generated successfully for: ${filePath}`);
+      res.json({
+        signedUrl,
+        expiresIn: 3600, // seconds
+        filePath
+      });
+    } catch (error: any) {
+      console.error("[Storage Proxy] Signed URL Error:", error.message);
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Firebase Storage Validate Access - Check file accessibility
+  app.post("/api/storage/validate", async (req, res) => {
+    const { fileId } = req.body;
+
+    if (!fileId) {
+      return res.status(400).json({ error: "Missing fileId in request body" });
+    }
+
+    try {
+      console.log(`[Storage Proxy] Validating access for: ${fileId}`);
+
+      const bucket = admin.storage().bucket();
+      const file = bucket.file(fileId);
+
+      // Check if file exists
+      const [exists] = await file.exists();
+
+      // Try to get metadata to verify accessibility
+      let accessible = false;
+      if (exists) {
+        try {
+          await file.getMetadata();
+          accessible = true;
+        } catch (metadataError: any) {
+          console.warn(`[Storage Proxy] Metadata access denied for ${fileId}:`, metadataError.message);
+          accessible = false;
+        }
+      }
+
+      console.log(`[Storage Proxy] Validation result for ${fileId}: exists=${exists}, accessible=${accessible}`);
+      res.json({
+        exists,
+        accessible,
+        fileId
+      });
+    } catch (error: any) {
+      console.error("[Storage Proxy] Validate Error:", error.message);
       res.status(500).json({ error: error.message });
     }
   });

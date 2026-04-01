@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import { useStudioStore } from '../../store/studioStore';
 import { useCredits } from '../../hooks/useCredits';
 import { kieService } from '../../services/kieService';
-import { compressImage, uploadBase64ViaProxy } from '../../services/storageService';
+import { compressImage, uploadBase64ViaProxy, getProxyUrl } from '../../services/storageService';
 import { auth, db } from '../../firebase';
 import { doc, updateDoc } from 'firebase/firestore';
 import { 
@@ -144,18 +144,43 @@ const GenerationStep: React.FC = () => {
 
       // DIRECT BASE64 FLOW REPLACED BY PROXY URL FLOW
       const { mainImageUrl, mirrorImageUrl, sessionId } = useStudioStore.getState();
-      
+
       if (!mainImageUrl) {
         throw new Error('Você deve anexar a Imagem Principal para a geração.');
       }
 
-      // Prepare image input array (main URL + mirror URL if exists)
-      const image_input = [mainImageUrl];
-      if (mirrorImageUrl) {
-        image_input.push(mirrorImageUrl);
+      // Convert URLs to proxy URLs if they are Firebase URLs
+      // Proxy URLs handle CORS and expired signed URLs automatically
+      let proxyMainUrl = mainImageUrl;
+      let proxyMirrorUrl = mirrorImageUrl;
+
+      try {
+        if (mainImageUrl.includes('firebasestorage')) {
+          console.log('Converting main image URL to proxy...');
+          proxyMainUrl = getProxyUrl(mainImageUrl);
+          console.log('Main image converted to proxy URL');
+        }
+      } catch (err) {
+        console.warn('Could not convert main image to proxy URL, using original:', err);
       }
 
-      // Call generation service with URLs as input
+      try {
+        if (mirrorImageUrl && mirrorImageUrl.includes('firebasestorage')) {
+          console.log('Converting mirror image URL to proxy...');
+          proxyMirrorUrl = getProxyUrl(mirrorImageUrl);
+          console.log('Mirror image converted to proxy URL');
+        }
+      } catch (err) {
+        console.warn('Could not convert mirror image to proxy URL, using original:', err);
+      }
+
+      // Prepare image input array (proxy URLs)
+      const image_input = [proxyMainUrl];
+      if (proxyMirrorUrl) {
+        image_input.push(proxyMirrorUrl);
+      }
+
+      // Call generation service with proxy URLs as input
       const taskId = await kieService.generateImage({
         prompt: activePrompt,
         model: selectedModel,

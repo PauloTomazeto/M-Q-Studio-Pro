@@ -74,7 +74,7 @@ const DiagnosisStep: React.FC = () => {
   const runAnalysis = async () => {
     // If we already have a result and we're not explicitly retrying, don't run
     if (analysisStartedRef.current && status === 'success') return;
-    
+
     const imageToAnalyze = base64Image;
     if (!imageToAnalyze || !sessionId) {
       console.warn('Missing base64Image or sessionId for analysis', { hasBase64: !!base64Image, sessionId });
@@ -83,7 +83,7 @@ const DiagnosisStep: React.FC = () => {
       }
       return;
     }
-    
+
     analysisStartedRef.current = true;
     setStatus('loading');
     setIsModeLocked(true);
@@ -91,6 +91,36 @@ const DiagnosisStep: React.FC = () => {
     setError(null);
     setElapsedTime(0);
     setProgressIndex(0);
+
+    // NOVO: Validação de URL antes de iniciar
+    const validateImageUrl = (): boolean => {
+      if (typeof imageToAnalyze !== 'string') {
+        console.warn('Image data is not a string');
+        return false;
+      }
+
+      if (imageToAnalyze.startsWith('data:image')) {
+        console.log('Image is valid base64 data URL');
+        return true;
+      }
+
+      if (imageToAnalyze.startsWith('blob:')) {
+        console.warn('Image is blob URL - may fail with CORS');
+        return true; // Allow blob but warn
+      }
+
+      console.warn('Unknown image format');
+      return false;
+    };
+
+    if (!validateImageUrl()) {
+      const msg = 'Formato de imagem inválido. Reprocesse a imagem.';
+      setError(msg);
+      setScanErrors([msg]);
+      setStatus('error');
+      setIsModeLocked(false);
+      return;
+    }
 
     try {
       if (retryCountRef.current === 0) {
@@ -102,13 +132,13 @@ const DiagnosisStep: React.FC = () => {
 
       console.log('Running diagnosis with Base64, Session:', sessionId);
       const data = await kieService.diagnoseImage(imageToAnalyze, sessionId);
-      
+
       // Perform Type Detection
       const detection = detectTypeFromFeatures(data);
       const { setImageType } = useStudioStore.getState();
       setImageType(
-        detection.type, 
-        data.typology ? 'gemini_ai' : 'post_process', 
+        detection.type,
+        data.typology ? 'gemini_ai' : 'post_process',
         detection.confidence,
         detection.alternatives
       );
@@ -119,12 +149,25 @@ const DiagnosisStep: React.FC = () => {
       setIsModeLocked(false);
     } catch (err: any) {
       console.error('Diagnosis Error:', err);
-      
-      // Retry logic for transient errors (like Zod validation if AI hallucinated)
-      if (retryCountRef.current < 1 && elapsedTime < 20) {
+
+      // NOVO: Retry logic com até 3 tentativas (melhorado)
+      const maxRetries = 3;
+      const maxElapsedTimeForRetry = 30; // segundos
+      const isTransientError =
+        err.message?.includes('AI_RESPONSE_EMPTY') ||
+        err.message?.includes('Zod') ||
+        err.message?.includes('TIMEOUT') ||
+        err.message?.includes('network') ||
+        err.message?.includes('KIE_API_ERROR');
+
+      if (retryCountRef.current < maxRetries && elapsedTime < maxElapsedTimeForRetry && isTransientError) {
         retryCountRef.current++;
         analysisStartedRef.current = false; // Allow retry
-        console.log('Retrying diagnosis (Attempt 2)...');
+        console.log(`Retrying diagnosis (Attempt ${retryCountRef.current + 1}/${maxRetries})...`);
+
+        // Pequeno delay antes de retry (exponencial: 1s, 2s, 3s)
+        await new Promise(resolve => setTimeout(resolve, retryCountRef.current * 1000));
+
         runAnalysis();
         return;
       }

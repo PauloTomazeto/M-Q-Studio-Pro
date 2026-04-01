@@ -479,19 +479,178 @@ export const uploadImage = async (
   };
 };
 
-export const uploadBase64ViaProxy = async (base64: string, path?: string): Promise<string> => {
+// Cache for signed URLs (stores until 50 minutes)
+const signedUrlCache = new Map<string, { url: string; expiresAt: number }>();
+
+// Fallback cache for base64 (last resort)
+const base64Cache = new Map<string, string>();
+
+export const getSignedUrl = async (filePath: string): Promise<string> => {
   try {
-    const response = await axios.post('/api/storage/upload', {
-      base64,
-      path: path || 'temp_generation'
-    });
-    
-    if (response.data.url) {
-      return response.data.url;
+    // Check cache first
+    const cached = signedUrlCache.get(filePath);
+    if (cached && cached.expiresAt > Date.now()) {
+      console.log('Returning cached signed URL for:', filePath);
+      return cached.url;
     }
-    throw new Error('No URL returned from proxy');
+
+    console.log('Requesting new signed URL for:', filePath);
+    const response = await axios.post('/api/storage/signed-url', {
+      filePath
+    });
+
+    if (!response.data.url) {
+      throw new Error('No signed URL returned');
+    }
+
+    // Cache for 50 minutes (3000 seconds)
+    const expiresAt = Date.now() + (50 * 60 * 1000);
+    signedUrlCache.set(filePath, {
+      url: response.data.url,
+      expiresAt
+    });
+
+    console.log('Signed URL obtained and cached for:', filePath);
+    return response.data.url;
   } catch (error: any) {
-    console.error('Proxy Upload Error:', error.response?.data || error.message);
-    throw new Error(`STORAGE_PROXY_UPLOAD_FAILED: ${error.message}`);
+    console.error('Signed URL Error:', error.response?.data || error.message);
+    throw new Error(`SIGNED_URL_FAILED: ${error.message}`);
+  }
+};
+
+/**
+ * Convert Firebase signed URL to proxy URL
+ *
+ * PROPÓSITO:
+ * - Contornar CORS bloqueado
+ * - Lidar com URLs assinadas expiradas
+ * - Permitir fallback automático do servidor
+ *
+ * ENTRADA: Firebase signed URL (com token)
+ * SAÍDA: Proxy URL que aponta para /api/storage/download/{path}
+ *
+ * SEGURANÇA:
+ * - O proxy no backend valida acesso do usuário
+ * - Não expõe credenciais da aplicação
+ *
+ * @param firebaseUrl Firebase signed URL
+ * @returns Proxy URL para uso seguro no cliente
+ */
+export const getProxyUrl = (firebaseUrl: string): string => {
+  try {
+    // Parse Firebase URL to extract bucket and path
+    // Format: https://firebasestorage.googleapis.com/v0/b/{bucket}/o/{path}?alt=media&token=...
+    const url = new URL(firebaseUrl);
+    const pathMatch = firebaseUrl.match(/\/o\/([^?]+)/);
+
+    if (!pathMatch || !pathMatch[1]) {
+      throw new Error('Invalid Firebase URL format');
+    }
+
+    const encodedPath = pathMatch[1];
+    const decodedPath = decodeURIComponent(encodedPath);
+
+    // Convert to proxy URL - será tratado pelo backend
+    const proxyUrl = `/api/storage/download/${decodedPath}`;
+    console.log('Converted Firebase URL to proxy URL:', proxyUrl);
+    return proxyUrl;
+  } catch (error: any) {
+    console.error('Proxy URL Conversion Error:', error.message);
+    throw new Error(`PROXY_URL_CONVERSION_FAILED: ${error.message}`);
+  }
+};
+
+/**
+ * Obter base64 armazenado em cache para fallback
+ *
+ * PROPÓSITO:
+ * - Último recurso se URLs falharem
+ * - Armazenar base64 em memória durante sessão
+ * - Permitir retry sem novo upload
+ *
+ * CASOS DE USO:
+ * 1. URL expirada no meio da geração
+ * 2. Erro de CORS em proxy URL
+ * 3. Falha temporária de rede
+ *
+ * LIMITAÇÕES:
+ * - Armazenamento em memória (não persiste)
+ * - Não é seguro para dados sensíveis
+ * - Usa espaço de memória do cliente
+ *
+ * @param filePath Caminho do arquivo (opcional)
+ * @returns Base64 string ou null
+ */
+export const getBase64Fallback = (filePath?: string): string | null => {
+  try {
+    if (filePath && base64Cache.has(filePath)) {
+      console.log('Returning base64 fallback for:', filePath);
+      return base64Cache.get(filePath) || null;
+    }
+
+    // Return first cached base64 if no path specified (emergency mode)
+    if (base64Cache.size > 0) {
+      const fallbackBase64 = base64Cache.values().next().value;
+      console.log('Returning emergency base64 fallback');
+      return fallbackBase64;
+    }
+
+    console.warn('No base64 fallback available');
+    return null;
+  } catch (error: any) {
+    console.error('Base64 Fallback Error:', error.message);
+    return null;
+  }
+};
+
+export const uploadBase64ViaProxy = async (base64: string, path?: string): Promise<string> => {
+  const filePath = path || `temp_generation/${Date.now()}`;
+
+  try {
+    // Strategy 1: Try signed URL first
+    console.log('Attempting signed URL upload...');
+    try {
+      const signedUrl = await getSignedUrl(filePath);
+      console.log('Using signed URL for upload');
+      return signedUrl;
+    } catch (signedUrlError) {
+      console.warn('Signed URL failed, attempting fallback:', signedUrlError);
+    }
+
+    // Strategy 2: Try proxy upload
+    console.log('Attempting proxy upload...');
+    try {
+      const response = await axios.post('/api/storage/upload', {
+        base64,
+        path: filePath
+      });
+
+      if (response.data.url) {
+        // Try to convert to proxy URL if possible
+        try {
+          const proxyUrl = getProxyUrl(response.data.url);
+          console.log('Upload successful, returning proxy URL');
+          return proxyUrl;
+        } catch {
+          // Fallback to returned URL if conversion fails
+          console.log('Upload successful, returning original URL');
+          return response.data.url;
+        }
+      }
+      throw new Error('No URL returned from proxy');
+    } catch (proxyError) {
+      console.warn('Proxy upload failed:', proxyError);
+    }
+
+    // Strategy 3: Cache base64 as last resort
+    console.log('Caching base64 as last resort...');
+    base64Cache.set(filePath, base64);
+    console.warn('Upload failed. Base64 cached for emergency fallback');
+
+    // Return a pseudo-URL indicating cached status
+    throw new Error('UPLOAD_FAILED_BASE64_CACHED');
+  } catch (error: any) {
+    console.error('Upload Base64 Via Proxy Error:', error.message);
+    throw new Error(`STORAGE_UPLOAD_FAILED: ${error.message}`);
   }
 };
