@@ -624,29 +624,41 @@ export const uploadBase64ViaProxy = async (base64: string, path?: string): Promi
       console.warn('Signed URL failed, attempting fallback:', signedUrlError);
     }
 
-    // Strategy 2: Try proxy upload
-    console.log('Attempting proxy upload...');
+    // Strategy 2: Try proxy upload + Client SDK upload
+    console.log('Attempting proxy processing + Client SDK upload...');
     try {
+      // Step 1: Get processed base64 from proxy
       const response = await axios.post('/api/storage/upload', {
         base64,
         path: filePath
       });
 
-      if (response.data.url) {
-        // Try to convert to proxy URL if possible
-        try {
-          const proxyUrl = getProxyUrl(response.data.url);
-          console.log('Upload successful, returning proxy URL');
-          return proxyUrl;
-        } catch {
-          // Fallback to returned URL if conversion fails
-          console.log('Upload successful, returning original URL');
-          return response.data.url;
-        }
+      if (!response.data.base64) {
+        throw new Error('No base64 returned from proxy');
       }
-      throw new Error('No URL returned from proxy');
-    } catch (proxyError) {
-      console.warn('Proxy upload failed:', proxyError);
+
+      const processedBase64 = response.data.base64;
+      console.log('Proxy processing successful, uploading to Firebase via Client SDK...');
+
+      // Step 2: Upload processed base64 to Firebase using Client SDK
+      const storageRef = ref(storage, filePath);
+      const matches = processedBase64.match(/^data:([A-Za-z-+/]+);base64,(.+)$/);
+
+      if (!matches || matches.length !== 3) {
+        throw new Error('Invalid processed base64 format');
+      }
+
+      const contentType = matches[1];
+      const buffer = Buffer.from(matches[2], 'base64');
+      const blob = new Blob([buffer], { type: contentType });
+
+      const uploadSnapshot = await uploadBytes(storageRef, blob, { contentType });
+      const downloadURL = await getDownloadURL(uploadSnapshot.ref);
+
+      console.log('Client SDK upload successful, returning URL');
+      return downloadURL;
+    } catch (proxyError: any) {
+      console.warn('Proxy + Client SDK upload failed:', proxyError.message);
     }
 
     // Strategy 3: Cache base64 as last resort

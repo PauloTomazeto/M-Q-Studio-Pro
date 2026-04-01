@@ -138,7 +138,7 @@ async function startServer() {
     }
   });
   
-  // Firebase Storage Proxy Upload - with Python processing
+  // Python Image Processing Proxy - Process images and return processed base64
   app.post("/api/storage/upload", async (req, res) => {
     const { base64, path: storagePath } = req.body;
 
@@ -150,10 +150,10 @@ async function startServer() {
     let wasPythonProcessed = false;
 
     try {
-      console.log(`[Storage Proxy] Uploading to: ${storagePath || 'temp_gen'}`);
+      console.log(`[Storage Proxy] Processing image for: ${storagePath || 'temp_gen'}`);
 
       // ============================================
-      // ETAPA 1: Tentar processar via Python (opcional)
+      // Tentar processar via Python (opcional)
       // ============================================
       try {
         console.log("[Storage Proxy] Attempting Python image processing...");
@@ -174,41 +174,17 @@ async function startServer() {
       } catch (pythonError: any) {
         // Python falhou ou não está rodando - isso é OK, continua com base64 original
         console.warn("[Storage Proxy] Python processing failed (usando base64 original):", pythonError.message);
-        // Continua com base64 original - não quebra o fluxo
       }
 
-      // ============================================
-      // ETAPA 2: Extrair tipo MIME e fazer upload ao Firebase
-      // ============================================
-      const matches = processedBase64.match(/^data:([A-Za-z-+/]+);base64,(.+)$/);
-      if (!matches || matches.length !== 3) {
-        return res.status(400).json({ error: "Invalid base64 format" });
-      }
-
-      const contentType = matches[1];
-      const buffer = Buffer.from(matches[2], 'base64');
-      const filename = `${Date.now()}_${Math.random().toString(36).substring(7)}`;
-      const fullPath = `${storagePath || 'temp_generation'}/${filename}`;
-
-      const bucket = admin.storage().bucket();
-      const file = bucket.file(fullPath);
-
-      await file.save(buffer, {
-        metadata: { contentType },
-        public: true,
-        resumable: false
+      // Retornar base64 processado para cliente fazer upload via Client SDK
+      console.log("[Storage Proxy] Returning processed base64 to client");
+      res.json({
+        base64: processedBase64,
+        processed: wasPythonProcessed,
+        message: "Image processed. Client should upload to Firebase using Client SDK."
       });
-
-      // Get Public URL (storage.googleapis.com é público, sem CORS)
-      const publicUrl = `https://storage.googleapis.com/${bucket.name}/${fullPath}`;
-      console.log("[Storage Proxy] Upload Success:", publicUrl);
-      if (wasPythonProcessed) {
-        console.log("[Storage Proxy] ✅ Imagem processada por Python e salva em Firebase");
-      }
-
-      res.json({ url: publicUrl, processed: wasPythonProcessed });
     } catch (error: any) {
-      console.error("[Storage Proxy] Upload Error:", error.message);
+      console.error("[Storage Proxy] Processing Error:", error.message);
       res.status(500).json({ error: error.message });
     }
   });
