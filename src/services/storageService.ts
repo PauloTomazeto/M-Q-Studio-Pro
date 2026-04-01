@@ -426,27 +426,30 @@ export const uploadImage = async (
         })
       ]);
 
-      // Extract URLs from processed base64 and upload to Firebase using Client SDK
+      // Get processed base64 from server
       const originalProcessedBase64 = originalProxyResponse.data.base64;
       const compressedProcessedBase64 = compressedProxyResponse.data.base64;
 
-      // Parse base64 and upload using Client SDK (now with processed, optimized images)
-      const uploadToFirebase = async (base64: string, path: string) => {
-        const matches = base64.match(/^data:([A-Za-z-+/]+);base64,(.+)$/);
-        if (!matches || matches.length !== 3) throw new Error('Invalid base64');
+      // Now need to upload processed base64 to Firebase using Client SDK
+      // For each processed base64, create blob and upload
+      const uploadProcessedToFirebase = async (base64: string, path: string) => {
+        try {
+          // Convert base64 data URL to Blob (browser-compatible, no Buffer!)
+          const response = await fetch(base64);
+          const blob = await response.blob();
 
-        const contentType = matches[1];
-        const buffer = Buffer.from(matches[2], 'base64');
-        const blob = new Blob([buffer], { type: contentType });
-
-        const storageRef = ref(storage, path);
-        const snapshot = await uploadBytes(storageRef, blob, { contentType });
-        return getDownloadURL(snapshot.ref);
+          const storageRef = ref(storage, path);
+          const snapshot = await uploadBytes(storageRef, blob);
+          return getDownloadURL(snapshot.ref);
+        } catch (err) {
+          console.error('[Background] Failed to upload processed image:', err);
+          throw err;
+        }
       };
 
       const [originalUrl, compressedUrl] = await Promise.all([
-        uploadToFirebase(originalProcessedBase64, storagePath),
-        uploadToFirebase(compressedProcessedBase64, `${storagePath}.compressed`)
+        uploadProcessedToFirebase(originalProcessedBase64, storagePath),
+        uploadProcessedToFirebase(compressedProcessedBase64, `${storagePath}.compressed`)
       ]);
 
       console.log('[Background] Uploads successful via proxy + Firebase ✅');
@@ -678,23 +681,23 @@ export const uploadBase64ViaProxy = async (base64: string, path?: string): Promi
       const processedBase64 = response.data.base64;
       console.log('Proxy processing successful, uploading to Firebase via Client SDK...');
 
-      // Step 2: Upload processed base64 to Firebase using Client SDK
-      const storageRef = ref(storage, filePath);
-      const matches = processedBase64.match(/^data:([A-Za-z-+/]+);base64,(.+)$/);
+      // Step 2: Upload processed base64 to Firebase using Client SDK (fetch + blob, no Buffer!)
+      console.log('Uploading processed image to Firebase via Client SDK...');
 
-      if (!matches || matches.length !== 3) {
-        throw new Error('Invalid processed base64 format');
+      try {
+        const response = await fetch(processedBase64);
+        const blob = await response.blob();
+
+        const storageRef = ref(storage, filePath);
+        const uploadSnapshot = await uploadBytes(storageRef, blob);
+        const downloadURL = await getDownloadURL(uploadSnapshot.ref);
+
+        console.log('Client SDK upload successful, returning URL');
+        return downloadURL;
+      } catch (uploadErr) {
+        console.error('Client SDK upload failed:', uploadErr);
+        throw uploadErr;
       }
-
-      const contentType = matches[1];
-      const buffer = Buffer.from(matches[2], 'base64');
-      const blob = new Blob([buffer], { type: contentType });
-
-      const uploadSnapshot = await uploadBytes(storageRef, blob, { contentType });
-      const downloadURL = await getDownloadURL(uploadSnapshot.ref);
-
-      console.log('Client SDK upload successful, returning URL');
-      return downloadURL;
     } catch (proxyError: any) {
       console.warn('Proxy + Client SDK upload failed:', proxyError.message);
     }
