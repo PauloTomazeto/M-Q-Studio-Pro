@@ -393,53 +393,25 @@ export const uploadImage = async (
       const storagePath = `generation_images/${userId}/${sessionId}/${filename}`;
 
       // ============================================
-      // UPLOAD VIA PROXY (sem CORS) ao invés de Client SDK
+      // UPLOAD VIA FIREBASE CLIENT SDK (original behavior)
       // ============================================
-      console.log('[Background] Converting files to base64 for proxy upload...');
+      console.log('[Background] Uploading via Firebase Client SDK...');
+      const storageRef = ref(storage, storagePath);
+      const compressedStorageRef = ref(storage, `${storagePath}.compressed`);
 
-      // Converter arquivo original para base64
-      const originalBase64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = reject;
-        reader.readAsDataURL(processedFile);
-      });
-
-      // Converter arquivo comprimido (Blob) para base64
-      const compressedBase64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = reject;
-        reader.readAsDataURL(compressedBlob);
-      });
-
-      // Upload via proxy (POST /api/storage/upload)
-      console.log('[Background] Uploading via proxy endpoint...');
-      const uploadPromises = await Promise.all([
-        axios.post('/api/storage/upload', {
-          base64: originalBase64,
-          path: `generation_images/${userId}/${sessionId}`
-        }).catch(err => {
-          console.error('[Background] Original upload failed:', err.message);
-          throw err;
-        }),
-        axios.post('/api/storage/upload', {
-          base64: compressedBase64,
-          path: `generation_images/${userId}/${sessionId}`
-        }).catch(err => {
-          console.error('[Background] Compressed upload failed:', err.message);
-          throw err;
-        })
+      // Upload both original and compressed in parallel
+      const [originalSnapshot, compressedSnapshot] = await Promise.all([
+        uploadBytes(storageRef, processedFile, { contentType: processedFile.type }),
+        uploadBytes(compressedStorageRef, compressedBlob, { contentType: 'image/jpeg' })
       ]);
 
-      const originalUrl = uploadPromises[0].data.url;
-      const compressedUrl = uploadPromises[1].data.url;
-      const wasProcessedByPython = uploadPromises[0].data.processed || uploadPromises[1].data.processed;
+      // Get download URLs
+      const [originalUrl, compressedUrl] = await Promise.all([
+        getDownloadURL(originalSnapshot.ref),
+        getDownloadURL(compressedSnapshot.ref)
+      ]);
 
-      console.log('[Background] Uploads successful via proxy ✅');
-      if (wasProcessedByPython) {
-        console.log('[Background] Images were processed by Python ✅');
-      }
+      console.log('[Background] Uploads successful via Firebase ✅');
 
       // Save metadata
       const uploadId = `up_${Date.now()}`;
