@@ -214,9 +214,18 @@ const GenerationStep: React.FC = () => {
           if (task.status === 'completed' || task.status === 'success') {
             if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
             if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
-            
-            const resultUrl = task.works?.[0]?.url || task.result_url;
-            
+
+            let resultUrl = task.works?.[0]?.url || task.result_url;
+
+            // Convert Firebase URL to proxy URL to avoid CORS issues
+            try {
+              resultUrl = getProxyUrl(resultUrl);
+              console.log('[GenerationStep] Converted resultUrl to proxy:', resultUrl);
+            } catch (e) {
+              console.warn('[GenerationStep] Could not convert resultUrl to proxy, using original:', e);
+              // Keep original URL if conversion fails
+            }
+
             setGenerationTask({
               taskId,
               status: 'completed',
