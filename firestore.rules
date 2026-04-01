@@ -1,0 +1,160 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId}
+    // Fields:
+    //   - uid: string (required)
+    //   - email: string (required)
+    //   - displayName: string
+    //   - photoURL: string
+    //   - role: string (admin, user)
+    //   - plan: string (basic, pro, premium)
+    //   - credits: int
+    //   - monthlySpent: int
+    //   - monthlyLimit: int
+    //   - resetDate: timestamp
+    //   - createdAt: timestamp
+    //
+    // Collection: projects
+    // Document ID: {projectId}
+    // Fields:
+    //   - id: string (required)
+    //   - userId: string (required)
+    //   - name: string (required)
+    //   - description: string
+    //   - status: string (draft, in_progress, completed, archived)
+    //   - isFavorite: bool
+    //   - createdAt: timestamp
+    //   - updatedAt: timestamp
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && 
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+         (request.auth.token.email == "paulosilvatomazeto@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'role', 'plan', 'credits']) &&
+             data.uid == request.auth.uid &&
+             data.role in ['admin', 'user'] &&
+             data.plan in ['basic', 'pro', 'premium'] &&
+             data.credits is int && data.credits >= 0;
+    }
+
+    function isValidProject(data) {
+      return data.keys().hasAll(['id', 'userId', 'name', 'status']) &&
+             data.userId == request.auth.uid &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.status in ['draft', 'in_progress', 'completed', 'archived'];
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isAuthenticated() && isValidUser(request.resource.data) && (request.resource.data.role == 'user' || isAdmin());
+      allow update: if (isOwner(userId) && isValidUser(request.resource.data) && request.resource.data.role == resource.data.role) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /projects/{projectId} {
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isAuthenticated() && isValidProject(request.resource.data);
+      allow update: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin()) && isValidProject(request.resource.data);
+      allow delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+
+      match /generations/{generationId} {
+        allow read: if isAuthenticated() && (get(/databases/$(database)/documents/projects/$(projectId)).data.userId == request.auth.uid || isAdmin());
+        allow write: if isAuthenticated() && (get(/databases/$(database)/documents/projects/$(projectId)).data.userId == request.auth.uid || isAdmin());
+      }
+    }
+
+    match /prompts/{promptId} {
+      function isPromptOwner() {
+        return isAuthenticated() && resource.data.createdByUserId == request.auth.uid;
+      }
+      
+      function isSharedWithUser() {
+        return isAuthenticated() && exists(/databases/$(database)/documents/user_prompt_shares/$(request.auth.uid + "_" + promptId));
+      }
+
+      allow read: if isPromptOwner() || 
+                     resource.data.visibility == "public" || 
+                     (resource.data.visibility == "shared" && isSharedWithUser()) ||
+                     isAdmin();
+      
+      allow create: if isAuthenticated() && request.resource.data.createdByUserId == request.auth.uid;
+      
+      allow update: if (isPromptOwner() && !resource.data.isLocked) || isAdmin();
+      
+      allow delete: if isPromptOwner() || isAdmin();
+
+      match /versions/{versionId} {
+        allow read: if get(/databases/$(database)/documents/prompts/$(promptId)).data.createdByUserId == request.auth.uid || 
+                       get(/databases/$(database)/documents/prompts/$(promptId)).data.visibility == "public" ||
+                       isAdmin();
+        allow write: if (get(/databases/$(database)/documents/prompts/$(promptId)).data.createdByUserId == request.auth.uid && 
+                        !get(/databases/$(database)/documents/prompts/$(promptId)).data.isLocked) || 
+                       isAdmin();
+      }
+    }
+
+    match /user_prompt_shares/{shareId} {
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow write: if isAuthenticated() && (get(/databases/$(database)/documents/prompts/$(request.resource.data.promptId)).data.createdByUserId == request.auth.uid || isAdmin());
+    }
+
+    match /user_prompt_favorites/{favoriteId} {
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow write: if isAuthenticated() && (request.resource.data.userId == request.auth.uid || resource.data.userId == request.auth.uid || isAdmin());
+    }
+
+    match /image_uploads/{uploadId} {
+      allow read, write: if isAuthenticated() && (request.resource.data.userId == request.auth.uid || resource.data.userId == request.auth.uid || isAdmin());
+    }
+
+    match /generation_sessions/{sessionId} {
+      allow read, write: if isAuthenticated() && (request.resource.data.userId == request.auth.uid || resource.data.userId == request.auth.uid || isAdmin());
+    }
+
+    match /scan_results/{scanId} {
+      allow read, write: if isAuthenticated() && (request.resource.data.userId == request.auth.uid || resource.data.userId == request.auth.uid || isAdmin());
+    }
+
+    match /file_validation_results/{resultId} {
+      allow read, write: if isAuthenticated() && (request.resource.data.userId == request.auth.uid || resource.data.userId == request.auth.uid || isAdmin());
+    }
+
+    match /user_upload_quota/{userId} {
+      allow read, write: if isOwner(userId) || isAdmin();
+    }
+
+    match /file_deduplication_index/{fileHash} {
+      allow read, write: if isAuthenticated();
+    }
+
+    match /validation_logs/{logId} {
+      allow read, write: if isAuthenticated() && (request.resource.data.userId == request.auth.uid || resource.data.userId == request.auth.uid || isAdmin());
+    }
+  }
+}
