@@ -1,0 +1,270 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User account information and credits",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "user"] },
+        "plan": { "type": "string", "enum": ["basic", "pro", "premium"] },
+        "credits": { "type": "integer" },
+        "monthlySpent": { "type": "integer" },
+        "monthlyLimit": { "type": "integer" },
+        "resetDate": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "role", "plan", "credits"]
+    },
+    "Project": {
+      "title": "Project",
+      "description": "Architectural project containing multiple generations",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "folderId": { "type": "string" },
+        "status": { "type": "string", "enum": ["draft", "in_progress", "completed", "archived"] },
+        "isFavorite": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "name", "status"]
+    },
+    "ImageGeneration": {
+      "title": "ImageGeneration",
+      "description": "A single image generation result",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "projectId": { "type": "string" },
+        "userId": { "type": "string" },
+        "prompt": { "type": "string" },
+        "status": { "type": "string" },
+        "resolution": { "type": "string" },
+        "imageUrls": { "type": "object" },
+        "creditsCost": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "projectId", "userId", "prompt", "status"]
+    },
+    "ImageUpload": {
+      "title": "ImageUpload",
+      "description": "Metadata for an uploaded image",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "originalFilename": { "type": "string" },
+        "fileSize": { "type": "integer" },
+        "fileType": { "type": "string" },
+        "mimeType": { "type": "string" },
+        "dimensions": {
+          "type": "object",
+          "properties": {
+            "width": { "type": "integer" },
+            "height": { "type": "integer" }
+          }
+        },
+        "uploadTimestamp": { "type": "string", "format": "date-time" },
+        "storagePath": { "type": "string" },
+        "sha256": { "type": "string" }
+      },
+      "required": ["id", "userId", "originalFilename", "fileSize", "mimeType", "storagePath", "sha256"]
+    },
+    "GenerationSession": {
+      "title": "GenerationSession",
+      "description": "A session for a specific image generation workflow",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "imageOriginalUrl": { "type": "string" },
+        "imageCompressedUrl": { "type": "string" },
+        "imageMetadata": { "type": "object" },
+        "mode": { "type": "string", "enum": ["prompt", "move"] },
+        "scanResult": { "type": "object" },
+        "scanStatus": { "type": "string", "enum": ["pending", "processing", "completed", "failed"] },
+        "scanErrors": { "type": "array" },
+        "scanDurationMs": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "imageOriginalUrl", "createdAt"]
+    },
+    "ScanResult": {
+      "title": "ScanResult",
+      "description": "Full architectural analysis result",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "sessionId": { "type": "string" },
+        "scanData": { "type": "object" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "sessionId", "scanData"]
+    },
+    "FileValidationResult": {
+      "title": "FileValidationResult",
+      "description": "Results of file validations",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "fileHash": { "type": "string" },
+        "validationTimestamp": { "type": "string", "format": "date-time" },
+        "validationSteps": { "type": "array" },
+        "validationPassed": { "type": "boolean" },
+        "validationErrors": { "type": "array" }
+      },
+      "required": ["id", "userId", "validationTimestamp", "validationPassed"]
+    },
+    "UserUploadQuota": {
+      "title": "UserUploadQuota",
+      "description": "Tracks daily upload counts for users",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "dailyUploadsCount": { "type": "number" },
+        "dailyLimit": { "type": "number" },
+        "periodStart": { "type": "string", "format": "date-time" },
+        "periodEnd": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "dailyUploadsCount", "dailyLimit"]
+    },
+    "FileDeduplicationIndex": {
+      "title": "FileDeduplicationIndex",
+      "description": "Index of file hashes for deduplication",
+      "type": "object",
+      "properties": {
+        "fileHash": { "type": "string" },
+        "originalStoragePath": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "reuseCount": { "type": "number" }
+      },
+      "required": ["fileHash", "originalStoragePath"]
+    },
+    "ValidationLog": {
+      "title": "ValidationLog",
+      "description": "Detailed logs for each validation step",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "validationStep": { "number": "number" },
+        "result": { "type": "string" },
+        "durationMs": { "type": "number" },
+        "details": { "type": "object" }
+      },
+      "required": ["id", "validationStep", "result"]
+    },
+    "Prompt": {
+      "title": "Prompt",
+      "description": "A generated or manual prompt with versioning and quality score",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "content": { "type": "string" },
+        "version": { "type": "integer" },
+        "isAiGenerated": { "type": "boolean" },
+        "qualityScore": { "type": "integer" },
+        "qualityBreakdown": {
+          "type": "object",
+          "properties": {
+            "clarity": { "type": "integer" },
+            "specificity": { "type": "integer" },
+            "coherence": { "type": "integer" },
+            "brevity": { "type": "integer" }
+          }
+        },
+        "wordCount": { "type": "integer" },
+        "characterCount": { "type": "integer" },
+        "promptMode": { "type": "string", "enum": ["single", "blocks"] },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "createdByUserId": { "type": "string" },
+        "lastEditedByUserId": { "type": "string" },
+        "copyCount": { "type": "integer" },
+        "isFavorite": { "type": "boolean" },
+        "visibility": { "type": "string", "enum": ["private", "shared", "public"] },
+        "promptSource": { "type": "string", "enum": ["gemini_ai", "manual", "edited_from_ai", "imported"] },
+        "isLocked": { "type": "boolean" },
+        "lockReason": { "type": "string" },
+        "usageCount": { "type": "integer" }
+      },
+      "required": ["id", "content", "version", "createdByUserId", "visibility", "promptSource"]
+    },
+    "PromptVersion": {
+      "title": "PromptVersion",
+      "description": "A historical version of a prompt",
+      "type": "object",
+      "properties": {
+        "version": { "type": "integer" },
+        "content": { "type": "string" },
+        "editedBy": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "qualityScore": { "type": "integer" }
+      },
+      "required": ["version", "content", "editedBy", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profiles and credit management"
+    },
+    "/image_uploads/{uploadId}": {
+      "schema": "ImageUpload",
+      "description": "Metadata for uploaded images"
+    },
+    "/generation_sessions/{sessionId}": {
+      "schema": "GenerationSession",
+      "description": "Active generation sessions"
+    },
+    "/scan_results/{scanId}": {
+      "schema": "ScanResult",
+      "description": "Architectural analysis results"
+    },
+    "/scan_results/{scanId}": {
+      "schema": "ScanResult",
+      "description": "Architectural analysis results"
+    },
+    "/projects/{projectId}": {
+      "schema": "Project",
+      "description": "User projects"
+    },
+    "/projects/{projectId}/generations/{generationId}": {
+      "schema": "ImageGeneration",
+      "description": "Generations within a project"
+    },
+    "/prompts/{promptId}": {
+      "schema": "Prompt",
+      "description": "User prompts and shared/public prompts"
+    },
+    "/prompts/{promptId}/versions/{versionId}": {
+      "schema": "PromptVersion",
+      "description": "Historical versions of a prompt"
+    },
+    "/file_validation_results/{resultId}": {
+      "schema": "FileValidationResult",
+      "description": "Stores results of file validations"
+    },
+    "/user_upload_quota/{userId}": {
+      "schema": "UserUploadQuota",
+      "description": "Tracks daily upload counts for users"
+    },
+    "/file_deduplication_index/{fileHash}": {
+      "schema": "FileDeduplicationIndex",
+      "description": "Index of file hashes for deduplication"
+    },
+    "/validation_logs/{logId}": {
+      "schema": "ValidationLog",
+      "description": "Detailed logs for each validation step"
+    }
+  }
+}
