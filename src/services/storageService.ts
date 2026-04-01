@@ -393,9 +393,9 @@ export const uploadImage = async (
       const storagePath = `generation_images/${userId}/${sessionId}/${filename}`;
 
       // ============================================
-      // UPLOAD VIA PROXY (to avoid CORS errors)
+      // UPLOAD VIA PROXY (server uploads to Firebase)
       // ============================================
-      console.log('[Background] Converting files to base64 for proxy upload...');
+      console.log('[Background] Converting files to base64 for server upload...');
 
       // Convert original file to base64
       const originalBase64 = await new Promise<string>((resolve, reject) => {
@@ -413,12 +413,12 @@ export const uploadImage = async (
         reader.readAsDataURL(compressedBlob);
       });
 
-      // Upload via proxy endpoint
-      console.log('[Background] Uploading via proxy endpoint...');
-      const [originalProxyResponse, compressedProxyResponse] = await Promise.all([
+      // Upload via server endpoint (server does the Firebase upload, no CORS)
+      console.log('[Background] Uploading via server endpoint (Python + Firebase)...');
+      const [originalResponse, compressedResponse] = await Promise.all([
         axios.post('/api/storage/upload', {
           base64: originalBase64,
-          path: `${storagePath}`
+          path: storagePath
         }),
         axios.post('/api/storage/upload', {
           base64: compressedBase64,
@@ -426,30 +426,11 @@ export const uploadImage = async (
         })
       ]);
 
-      // Extract URLs from processed base64 and upload to Firebase using Client SDK
-      const originalProcessedBase64 = originalProxyResponse.data.base64;
-      const compressedProcessedBase64 = compressedProxyResponse.data.base64;
+      // Get URLs returned by server (Firebase storage URLs)
+      const originalUrl = originalResponse.data.url;
+      const compressedUrl = compressedResponse.data.url;
 
-      // Parse base64 and upload using Client SDK (now with processed, optimized images)
-      const uploadToFirebase = async (base64: string, path: string) => {
-        const matches = base64.match(/^data:([A-Za-z-+/]+);base64,(.+)$/);
-        if (!matches || matches.length !== 3) throw new Error('Invalid base64');
-
-        const contentType = matches[1];
-        const buffer = Buffer.from(matches[2], 'base64');
-        const blob = new Blob([buffer], { type: contentType });
-
-        const storageRef = ref(storage, path);
-        const snapshot = await uploadBytes(storageRef, blob, { contentType });
-        return getDownloadURL(snapshot.ref);
-      };
-
-      const [originalUrl, compressedUrl] = await Promise.all([
-        uploadToFirebase(originalProcessedBase64, storagePath),
-        uploadToFirebase(compressedProcessedBase64, `${storagePath}.compressed`)
-      ]);
-
-      console.log('[Background] Uploads successful via proxy + Firebase ✅');
+      console.log('[Background] Uploads successful via server ✅');
 
       // Save metadata
       const uploadId = `up_${Date.now()}`;
@@ -662,41 +643,22 @@ export const uploadBase64ViaProxy = async (base64: string, path?: string): Promi
       console.warn('Signed URL failed, attempting fallback:', signedUrlError);
     }
 
-    // Strategy 2: Try proxy upload + Client SDK upload
-    console.log('Attempting proxy processing + Client SDK upload...');
+    // Strategy 2: Server-side upload via proxy
+    console.log('Attempting server-side upload...');
     try {
-      // Step 1: Get processed base64 from proxy
       const response = await axios.post('/api/storage/upload', {
         base64,
         path: filePath
       });
 
-      if (!response.data.base64) {
-        throw new Error('No base64 returned from proxy');
+      if (!response.data.url) {
+        throw new Error('No URL returned from server');
       }
 
-      const processedBase64 = response.data.base64;
-      console.log('Proxy processing successful, uploading to Firebase via Client SDK...');
-
-      // Step 2: Upload processed base64 to Firebase using Client SDK
-      const storageRef = ref(storage, filePath);
-      const matches = processedBase64.match(/^data:([A-Za-z-+/]+);base64,(.+)$/);
-
-      if (!matches || matches.length !== 3) {
-        throw new Error('Invalid processed base64 format');
-      }
-
-      const contentType = matches[1];
-      const buffer = Buffer.from(matches[2], 'base64');
-      const blob = new Blob([buffer], { type: contentType });
-
-      const uploadSnapshot = await uploadBytes(storageRef, blob, { contentType });
-      const downloadURL = await getDownloadURL(uploadSnapshot.ref);
-
-      console.log('Client SDK upload successful, returning URL');
-      return downloadURL;
+      console.log('Server upload successful, returning Firebase URL');
+      return response.data.url;
     } catch (proxyError: any) {
-      console.warn('Proxy + Client SDK upload failed:', proxyError.message);
+      console.warn('Server upload failed:', proxyError.message);
     }
 
     // Strategy 3: Cache base64 as last resort
