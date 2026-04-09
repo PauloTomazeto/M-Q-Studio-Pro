@@ -515,21 +515,24 @@ export const kieService = {
       console.log('Calling KIE Gemini API for diagnosis...');
       const response = await axios.post('/api/kie/gemini-2.5-pro/v1/chat/completions', {
         model: 'gemini-2.5-pro',
+        stream: false,
         messages: [
-          { role: 'system', content: SYSTEM_INSTRUCTION },
-          { 
-            role: 'user', 
+          {
+            role: 'system',
+            content: [{ type: 'text', text: SYSTEM_INSTRUCTION }]
+          },
+          {
+            role: 'user',
             content: [
               { type: 'text', text: 'Perform a full architectural diagnosis of this image. Return ONLY the JSON object.' },
-              { 
-                type: 'image_url', 
-                image_url: { url: imageBase64 } 
+              {
+                type: 'image_url',
+                image_url: { url: imageBase64 }
               }
             ]
           }
         ],
-        temperature: 0.7,
-        response_format: { type: 'json_object' }
+        temperature: 0.7
       });
 
       const content = extractContent(response.data);
@@ -587,20 +590,38 @@ export const kieService = {
     
     const response = await axios.post('/api/kie/gemini-2.5-pro/v1/chat/completions', {
       model: 'gemini-2.5-pro',
+      stream: false,
       messages: [
-        { 
-          role: 'user', 
+        {
+          role: 'user',
           content: [
             { type: 'text', text: 'You are an architectural and interior design expert. Your task is to determine if an image represents an architectural or interior design subject (building, interior room, floor plan, facade, furniture, cabinetry, built-in shelves, etc.). Respond ONLY with a JSON object: {"isArchitecture": boolean, "confidence": number, "reason": string}' },
-            { 
-              type: 'image_url', 
-              image_url: { url: imageBase64 } 
+            {
+              type: 'image_url',
+              image_url: { url: imageBase64 }
             }
           ]
         }
       ],
       temperature: 0.1,
-      response_format: { type: 'json_object' }
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'structured_output',
+          strict: true,
+          schema: {
+            type: 'object',
+            title: 'ArchitectureDetection',
+            description: 'Result of architectural image detection',
+            properties: {
+              isArchitecture: { type: 'boolean' },
+              confidence: { type: 'number' },
+              reason: { type: 'string' }
+            },
+            required: ['isArchitecture', 'confidence', 'reason']
+          }
+        }
+      }
     });
     
     const content = extractContent(response.data);
@@ -843,9 +864,10 @@ Formato de saída: ${mode === 'single' ? 'Texto plano com JSON de análise ao fi
     try {
       const response = await axios.post('/api/kie/gemini-2.5-pro/v1/chat/completions', {
         model: 'gemini-2.5-pro',
+        stream: false,
         messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userMessage }
+          { role: 'system', content: [{ type: 'text', text: systemPrompt }] },
+          { role: 'user', content: [{ type: 'text', text: userMessage }] }
         ],
         temperature: 0.7
       });
@@ -1061,21 +1083,21 @@ Formato de saída: ${mode === 'single' ? 'Texto plano com JSON de análise ao fi
     
     const response = await axios.post('/api/kie/gemini-2.5-pro/v1/chat/completions', {
       model: 'gemini-2.5-pro',
+      stream: false,
       messages: [
-        { role: 'system', content: systemInstruction },
-        { 
-          role: 'user', 
+        { role: 'system', content: [{ type: 'text', text: systemInstruction }] },
+        {
+          role: 'user',
           content: [
             { type: 'text', text: 'Analyze this material image and extract its properties as JSON.' },
-            { 
-              type: 'image_url', 
-              image_url: { url: imageBase64 } 
+            {
+              type: 'image_url',
+              image_url: { url: imageBase64 }
             }
           ]
         }
       ],
-      temperature: 0.7,
-      response_format: { type: 'json_object' }
+      temperature: 0.7
     });
 
     const content = extractContent(response.data);
