@@ -8,7 +8,7 @@ import MaterialGrid from './MaterialGrid';
 import { LightingAnalysis } from './LightingAnalysis';
 import { CameraAnalysis } from './CameraAnalysis';
 import { ColorTemperaturePanel } from './ColorTemperaturePanel';
-import { Loader2, AlertCircle, CheckCircle2, ShieldCheck, Camera, Sun, Layers, RefreshCw, SkipForward, ChevronDown, ChevronUp, Zap, Thermometer } from 'lucide-react';
+import { Loader2, AlertCircle, CheckCircle2, ShieldCheck, Camera, Sun, Layers, RefreshCw, SkipForward, ChevronDown, ChevronUp, Zap, Thermometer, Home } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 const PROGRESS_MESSAGES = [
@@ -17,6 +17,8 @@ const PROGRESS_MESSAGES = [
   "Processando volumetria e geometria...",
   "Identificando materiais e texturas PBR...",
   "Analisando iluminação e pontos de luz...",
+  "Mapeando ambientes e mobiliário...",
+  "Detectando veículos e equipamentos...",
   "Estimando parâmetros de câmera...",
   "Calculando níveis de confiança...",
   "Finalizando ScanResult estruturado...",
@@ -46,7 +48,12 @@ const DiagnosisStep: React.FC = () => {
   const [showLighting, setShowLighting] = useState(true);
   const [showCamera, setShowCamera] = useState(true);
   const [showTemperature, setShowTemperature] = useState(true);
+  const [showAmbientes, setShowAmbientes] = useState(true);
+  const [showVolumes, setShowVolumes] = useState(true);
+  const [showOpenings, setShowOpenings] = useState(true);
+  const [showStructural, setShowStructural] = useState(true);
   const analysisStartedRef = useRef(!!scanResult);
+  const isProcessingRef = useRef(false);
   const { materialMetrics } = useStudioStore();
   const retryCountRef = useRef(0);
 
@@ -74,71 +81,50 @@ const DiagnosisStep: React.FC = () => {
   const runAnalysis = async () => {
     // If we already have a result and we're not explicitly retrying, don't run
     if (analysisStartedRef.current && status === 'success') return;
-
+    
+    if (isProcessingRef.current) return;
+    
     const imageToAnalyze = base64Image;
     if (!imageToAnalyze || !sessionId) {
       console.warn('Missing base64Image or sessionId for analysis', { hasBase64: !!base64Image, sessionId });
-      if (!base64Image && image) {
-        setError('Aguardando processamento da imagem...');
-      }
       return;
     }
-
-    analysisStartedRef.current = true;
+    
+    isProcessingRef.current = true;
+    analysisStartedRef.current = true; // Mark immediately to prevent useEffect re-triggering
     setStatus('loading');
     setIsModeLocked(true);
     setScanStatus('processing');
     setError(null);
-    setElapsedTime(0);
-    setProgressIndex(0);
-
-    // NOVO: Validação de URL antes de iniciar
-    const validateImageUrl = (): boolean => {
-      if (typeof imageToAnalyze !== 'string') {
-        console.warn('Image data is not a string');
-        return false;
-      }
-
-      if (imageToAnalyze.startsWith('data:image')) {
-        console.log('Image is valid base64 data URL');
-        return true;
-      }
-
-      if (imageToAnalyze.startsWith('blob:')) {
-        console.warn('Image is blob URL - may fail with CORS');
-        return true; // Allow blob but warn
-      }
-
-      console.warn('Unknown image format');
-      return false;
-    };
-
-    if (!validateImageUrl()) {
-      const msg = 'Formato de imagem inválido. Reprocesse a imagem.';
-      setError(msg);
-      setScanErrors([msg]);
-      setStatus('error');
-      setIsModeLocked(false);
-      return;
+    
+    // Reset elapsed time only on first attempt
+    if (retryCountRef.current === 0) {
+      setElapsedTime(0);
+      setProgressIndex(0);
     }
 
     try {
+      // ONLY consume credits on the very first attempt
       if (retryCountRef.current === 0) {
+        console.log('[Diagnosis] Consuming credits for first attempt...');
         const hasCredits = await consumeCredits(5, 'diagnosis_gemini');
         if (!hasCredits) {
+          isProcessingRef.current = false;
           throw new Error('Créditos insuficientes para realizar a análise.');
         }
+      } else {
+        console.log(`[Diagnosis] Retry attempt ${retryCountRef.current}. Skipping credit consumption.`);
       }
 
       console.log('Running diagnosis with Base64, Session:', sessionId);
       const data = await kieService.diagnoseImage(imageToAnalyze, sessionId);
-
+      
       // Perform Type Detection
       const detection = detectTypeFromFeatures(data);
       const { setImageType } = useStudioStore.getState();
       setImageType(
-        detection.type,
-        data.typology ? 'gemini_ai' : 'post_process',
+        detection.type, 
+        data.typology ? 'gemini_ai' : 'post_process', 
         detection.confidence,
         detection.alternatives
       );
@@ -147,32 +133,35 @@ const DiagnosisStep: React.FC = () => {
       setScanResult(data, elapsedTime * 1000);
       setStatus('success');
       setIsModeLocked(false);
+      isProcessingRef.current = false;
+      analysisStartedRef.current = true; // Mark as finished only on success
     } catch (err: any) {
       console.error('Diagnosis Error:', err);
-
-      // NOVO: Retry logic com até 3 tentativas (melhorado)
-      const maxRetries = 3;
-      const maxElapsedTimeForRetry = 30; // segundos
-      const isTransientError =
-        err.message?.includes('AI_RESPONSE_EMPTY') ||
-        err.message?.includes('Zod') ||
-        err.message?.includes('TIMEOUT') ||
-        err.message?.includes('network') ||
-        err.message?.includes('KIE_API_ERROR');
-
-      if (retryCountRef.current < maxRetries && elapsedTime < maxElapsedTimeForRetry && isTransientError) {
+      isProcessingRef.current = false;
+      
+      // Retry logic for transient errors
+      const isTransient = err.message?.includes('HTML') || 
+                          err.message?.includes('JSON') || 
+                          err.message?.includes('timeout') ||
+                          err.message?.toLowerCase().includes('maintained') ||
+                          err.message?.toLowerCase().includes('maintenance');
+      
+      // We only retry ONCE for transient errors
+      if (isTransient && retryCountRef.current < 1 && elapsedTime < 60) {
         retryCountRef.current++;
-        analysisStartedRef.current = false; // Allow retry
-        console.log(`Retrying diagnosis (Attempt ${retryCountRef.current + 1}/${maxRetries})...`);
-
-        // Pequeno delay antes de retry (exponencial: 1s, 2s, 3s)
-        await new Promise(resolve => setTimeout(resolve, retryCountRef.current * 1000));
-
+        console.log(`Retrying diagnosis (Attempt ${retryCountRef.current + 1})...`);
+        
+        // Wait a bit before retrying
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        
         runAnalysis();
         return;
       }
 
-      const msg = err.message || 'Erro ao analisar imagem. Tente novamente.';
+      let msg = err.message || 'Erro ao analisar imagem. Tente novamente.';
+      if (msg.toLowerCase().includes('maintained') || msg.toLowerCase().includes('maintenance')) {
+        msg = 'O servidor de IA está em manutenção temporária. Por favor, tente novamente em alguns minutos.';
+      }
       setError(msg);
       setScanErrors([msg]);
       setStatus('error');
@@ -444,6 +433,20 @@ const DiagnosisStep: React.FC = () => {
               <p className="text-xs text-neutral-500 uppercase mb-1">Fonte Dominante</p>
               <p className="font-bold">{result.light.dominant_source}</p>
             </div>
+            {result.plantaType && (
+              <div>
+                <p className="text-xs text-neutral-500 uppercase mb-1">Tipo de Planta</p>
+                <p className="font-bold">Tipo {result.plantaType}</p>
+              </div>
+            )}
+            <div>
+              <p className="text-xs text-neutral-500 uppercase mb-1">Volumes</p>
+              <p className="font-bold">{result.volumes?.length || 0}</p>
+            </div>
+            <div>
+              <p className="text-xs text-neutral-500 uppercase mb-1">Aberturas</p>
+              <p className="font-bold">{result.openings?.length || 0}</p>
+            </div>
             <div>
               <p className="text-xs text-neutral-500 uppercase mb-1">Altura Câmera</p>
               <p className="font-bold">{result.cameraData?.height_m?.toFixed(2) || 'N/A'}m</p>
@@ -454,6 +457,218 @@ const DiagnosisStep: React.FC = () => {
             </div>
           </div>
           
+          {/* Volumes Analysis Section */}
+          {result.volumes && result.volumes.length > 0 && (
+            <div className="mt-10 pt-10 border-t border-neutral-100 dark:border-neutral-800 space-y-8">
+              <div className="flex items-center justify-between">
+                <h5 className="font-bold flex items-center gap-2 text-primary">
+                  <Layers className="w-4 h-4" />
+                  Hierarquia de Volumes (Âncoras Estruturais)
+                </h5>
+                <button 
+                  onClick={() => setShowVolumes(!showVolumes)}
+                  className="text-xs font-bold text-primary flex items-center gap-1 hover:underline"
+                >
+                  {showVolumes ? <><ChevronUp size={14} /> Recolher</> : <><ChevronDown size={14} /> Expandir</>}
+                </button>
+              </div>
+
+              <AnimatePresence>
+                {showVolumes && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: "auto", opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    className="overflow-hidden"
+                  >
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      {result.volumes.map((vol: any) => (
+                        <div key={vol.id} className={`p-5 rounded-3xl border ${vol.dominant ? 'bg-primary/5 border-primary/20' : 'bg-neutral-50 dark:bg-neutral-950 border-neutral-100 dark:border-neutral-800'} space-y-3`}>
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-bold text-neutral-400 uppercase">ID: {vol.id}</span>
+                            {vol.dominant && (
+                              <span className="text-[10px] font-bold bg-primary text-white px-2 py-0.5 rounded-full uppercase">Dominante</span>
+                            )}
+                          </div>
+                          <p className="font-bold text-neutral-900 dark:text-white capitalize">{vol.forma_geometrica.replace(/_/g, ' ')}</p>
+                          <div className="grid grid-cols-2 gap-4 text-xs">
+                            <div>
+                              <p className="text-neutral-500 uppercase text-[9px] mb-0.5">Posição</p>
+                              <p className="font-medium">{vol.posicao_relativa}</p>
+                            </div>
+                            <div>
+                              <p className="text-neutral-500 uppercase text-[9px] mb-0.5">Proporção H:L</p>
+                              <p className="font-medium">{vol.proporcao_H_x_L}</p>
+                            </div>
+                          </div>
+                          {vol.relacao_com_volume_anterior && (
+                            <div className="pt-2 border-t border-neutral-200/50 dark:border-neutral-800/50">
+                              <p className="text-neutral-500 uppercase text-[9px] mb-0.5">Relação Espacial</p>
+                              <p className="text-xs italic">{vol.relacao_com_volume_anterior}</p>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          )}
+
+          {/* Openings Analysis Section */}
+          {result.openings && result.openings.length > 0 && (
+            <div className="mt-10 pt-10 border-t border-neutral-100 dark:border-neutral-800 space-y-8">
+              <div className="flex items-center justify-between">
+                <h5 className="font-bold flex items-center gap-2 text-secondary">
+                  <Home className="w-4 h-4" />
+                  Sistemas de Aberturas e Esquadrias
+                </h5>
+                <button 
+                  onClick={() => setShowOpenings(!showOpenings)}
+                  className="text-xs font-bold text-secondary flex items-center gap-1 hover:underline"
+                >
+                  {showOpenings ? <><ChevronUp size={14} /> Recolher</> : <><ChevronDown size={14} /> Expandir</>}
+                </button>
+              </div>
+
+              <AnimatePresence>
+                {showOpenings && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: "auto", opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    className="overflow-hidden"
+                  >
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {result.openings.map((op: any) => (
+                        <div key={op.id} className="bg-neutral-50 dark:bg-neutral-950 p-4 rounded-2xl border border-neutral-100 dark:border-neutral-800 space-y-3">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-bold text-neutral-400 uppercase">{op.quantidade_e_ritmo}</span>
+                            <span className="text-[9px] font-bold bg-secondary/10 text-secondary px-2 py-0.5 rounded uppercase">{op.posicao_na_fachada}</span>
+                          </div>
+                          <p className="font-bold text-sm text-neutral-900 dark:text-white capitalize">{op.tipo_abertura.replace(/_/g, ' ')}</p>
+                          <div className="space-y-1 text-[11px]">
+                            <p className="text-neutral-500"><span className="font-bold text-neutral-700 dark:text-neutral-300">Perfil:</span> {op.material_perfil}</p>
+                            <p className="text-neutral-500"><span className="font-bold text-neutral-700 dark:text-neutral-300">Vidro:</span> {op.tipo_vidro}</p>
+                            <p className="text-neutral-500"><span className="font-bold text-neutral-700 dark:text-neutral-300">Prop:</span> {op.proporcao_H_L}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          )}
+
+          {/* Structural Highlights Section */}
+          {result.structural_highlights && result.structural_highlights.length > 0 && (
+            <div className="mt-10 pt-10 border-t border-neutral-100 dark:border-neutral-800 space-y-8">
+              <div className="flex items-center justify-between">
+                <h5 className="font-bold flex items-center gap-2 text-warning">
+                  <Zap className="w-4 h-4" />
+                  Destaques Estruturais
+                </h5>
+                <button 
+                  onClick={() => setShowStructural(!showStructural)}
+                  className="text-xs font-bold text-warning flex items-center gap-1 hover:underline"
+                >
+                  {showStructural ? <><ChevronUp size={14} /> Recolher</> : <><ChevronDown size={14} /> Expandir</>}
+                </button>
+              </div>
+
+              <AnimatePresence>
+                {showStructural && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: "auto", opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    className="overflow-hidden"
+                  >
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                      {result.structural_highlights.map((sh: any) => (
+                        <div key={sh.id} className="bg-warning/5 p-4 rounded-2xl border border-warning/20 space-y-2">
+                          <p className="text-[10px] font-bold text-warning uppercase">{sh.tipo}</p>
+                          <p className="font-bold text-neutral-900 dark:text-white">{sh.material}</p>
+                          <p className="text-xs text-neutral-500">{sh.dimensao}</p>
+                          <p className="text-[10px] italic text-neutral-400">{sh.acabamento}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          )}
+
+          {/* Ambientes Analysis Section (Floor Plan Only) */}
+          {result.isFloorPlan && result.ambientes && (
+            <div className="mt-10 pt-10 border-t border-neutral-100 dark:border-neutral-800 space-y-8">
+              <div className="flex items-center justify-between">
+                <h5 className="font-bold flex items-center gap-2 text-primary">
+                  <Home className="w-4 h-4" />
+                  Inventário de Ambientes Detectados
+                </h5>
+                <button 
+                  onClick={() => setShowAmbientes(!showAmbientes)}
+                  className="text-xs font-bold text-primary flex items-center gap-1 hover:underline"
+                >
+                  {showAmbientes ? <><ChevronUp size={14} /> Recolher</> : <><ChevronDown size={14} /> Expandir</>}
+                </button>
+              </div>
+
+              <AnimatePresence>
+                {showAmbientes && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: "auto", opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    className="overflow-hidden"
+                  >
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {result.ambientes.map((amb: any) => (
+                        <div key={amb.id} className="bg-neutral-50 dark:bg-neutral-950 p-4 rounded-2xl border border-neutral-100 dark:border-neutral-800 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-bold text-neutral-400 uppercase">ID: {amb.id}</span>
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${
+                              amb.tipo === 'molhado' ? 'bg-blue-500/10 text-blue-500' :
+                              amb.tipo === 'externo' ? 'bg-green-500/10 text-green-500' :
+                              amb.tipo === 'servico' ? 'bg-neutral-500/10 text-neutral-500' :
+                              'bg-primary/10 text-primary'
+                            }`}>
+                              {amb.tipo}
+                            </span>
+                          </div>
+                          <p className="font-bold text-neutral-900 dark:text-white">{amb.nome}</p>
+                          {amb.area_m2 && <p className="text-xs text-neutral-500">{amb.area_m2}m²</p>}
+                          {amb.equipamentos_fixos && amb.equipamentos_fixos.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-2">
+                              {amb.equipamentos_fixos.map((eq: string, idx: number) => (
+                                <span key={idx} className="text-[9px] bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 px-1.5 py-0.5 rounded text-neutral-400">
+                                  {eq}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                          {amb.veiculos && amb.veiculos.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-2">
+                              {amb.veiculos.map((veic: string, idx: number) => (
+                                <span key={idx} className="text-[9px] bg-primary/5 dark:bg-primary/10 border border-primary/20 px-1.5 py-0.5 rounded text-primary font-bold flex items-center gap-1">
+                                  <span className="opacity-70">🚗</span> {veic}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          )}
+
           {/* Material Analysis Section */}
           <div className="mt-10 pt-10 border-t border-neutral-100 dark:border-neutral-800 space-y-8">
             <div className="flex items-center justify-between">

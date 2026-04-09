@@ -5,7 +5,6 @@ import UploadStep from '../components/studio/UploadStep';
 import DiagnosisStep from '../components/studio/DiagnosisStep';
 import ConfigStep from '../components/studio/ConfigStep';
 import ResultStep from '../components/studio/ResultStep';
-import GenerationStep from '../components/studio/GenerationStep';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ChevronRight, ChevronLeft, RotateCcw, Lock } from 'lucide-react';
 import { useCredits } from '../hooks/useCredits';
@@ -45,7 +44,6 @@ const Studio: React.FC = () => {
     { id: 'diagnosis', label: 'Diagnóstico' },
     { id: 'config', label: 'Configuração' },
     { id: 'result', label: 'Resultado' },
-    { id: 'generate', label: 'Geração' },
   ];
 
   const currentStepIndex = steps.findIndex(s => s.id === currentStep);
@@ -57,7 +55,6 @@ const Studio: React.FC = () => {
     if (index === 2) return !image;
     if (index === 3) return !scanResult;
     if (index === 4) return !scanResult;
-    if (index === 5) return !scanResult;
     return true;
   };
 
@@ -68,7 +65,6 @@ const Studio: React.FC = () => {
       case 'diagnosis': return <DiagnosisStep />;
       case 'config': return <ConfigStep />;
       case 'result': return <ResultStep />;
-      case 'generate': return <GenerationStep />;
       default: return <ModeSelect />;
     }
   };

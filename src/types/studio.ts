@@ -8,8 +8,9 @@ export type ImageType =
   | 'DETALHE' 
   | '3D_MOCK';
 
-export type TopDownAngle = 90 | 45;
+export type TopDownAngle = 90 | 80 | 60 | 45;
 export type EnvironmentType = 'CONDOMINIO_ALTO_PADRAO' | 'URBANO' | 'RURAL' | 'BAIRRO_COMUM';
+export type HumanizationStyle = 'MINIMALISTA' | 'TROPICAL' | 'CONTEMPORANEO';
 
 export type TypeSource = 'gemini_ai' | 'manual_override' | 'post_process';
 
@@ -48,6 +49,12 @@ export const ENVIRONMENT_LABELS: Record<EnvironmentType, string> = {
   URBANO: 'Área Urbana (Brasil)',
   RURAL: 'Área Rural (Brasil)',
   BAIRRO_COMUM: 'Bairro Comum/Baixo Padrão (Brasil)'
+};
+
+export const HUMANIZATION_STYLE_LABELS: Record<HumanizationStyle, string> = {
+  MINIMALISTA: 'Minimalista',
+  TROPICAL: 'Tropical',
+  CONTEMPORANEO: 'Contemporâneo'
 };
 
 export type ReflectanceType = 'matte' | 'semi-matte' | 'semi-gloss' | 'gloss' | 'espelhado';

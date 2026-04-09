@@ -12,6 +12,11 @@ const ModeSwitcher: React.FC = () => {
   const [pendingMode, setPendingMode] = useState<StudioMode | null>(null);
   const navigate = useNavigate();
 
+  const modeLabels: Record<StudioMode, string> = {
+    prompt: 'Modo Prompt',
+    move: 'Modo Move'
+  };
+
   const handleModeChange = (newMode: StudioMode) => {
     if (newMode === mode) {
       setIsOpen(false);
@@ -43,7 +48,7 @@ const ModeSwitcher: React.FC = () => {
         ) : (
           <Video size={16} className="text-secondary" />
         )}
-        <span className="text-sm font-bold capitalize">{mode || 'Selecionar Modo'}</span>
+        <span className="text-sm font-bold">{mode ? modeLabels[mode] : 'Selecionar Modo'}</span>
         <ChevronDown size={14} className={`transition-transform ${isOpen ? 'rotate-180' : ''}`} />
       </button>
 

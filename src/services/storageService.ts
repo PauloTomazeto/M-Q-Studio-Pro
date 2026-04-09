@@ -1,4 +1,3 @@
-import axios from 'axios';
 import { ref, uploadBytesResumable, getDownloadURL, uploadBytes, deleteObject } from 'firebase/storage';
 import { collection, doc, setDoc, query, where, getDocs, getDoc, increment, updateDoc } from 'firebase/firestore';
 import { storage, db, auth, handleFirestoreError, OperationType } from '../firebase';
@@ -8,13 +7,13 @@ import { kieService } from './kieService';
 
 // Constants from PRD
 const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/tiff'];
-const MIN_FILE_SIZE = 1 * 1024 * 1024; // 1MB
+const MIN_FILE_SIZE = 300 * 1024; // 300KB
 const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB
 const MIN_WIDTH = 800;
 const MIN_HEIGHT = 600;
 const MAX_WIDTH = 8000;
 const MAX_HEIGHT = 8000;
-const CONTENT_CONFIDENCE_THRESHOLD = 0.70;
+const CONTENT_CONFIDENCE_THRESHOLD = 0.60;
 
 export interface ImageMetadata {
   width: number;
@@ -285,12 +284,18 @@ export const validateFileChain = async (
       
       return { valid: true, details: { confidence } };
     } catch (err: any) {
-      console.error('Content Validation Error:', err);
+      const isMaintenance = err.message?.toLowerCase().includes('maintained') || err.message?.toLowerCase().includes('maintenance');
+      if (isMaintenance) {
+        console.warn('Content Validation skipped: KIE API is under maintenance.');
+      } else {
+        console.error('Content Validation Error:', err);
+      }
+      // Fail-safe: if the validation service fails technically, we don't block or warn the user
+      // as it might be a temporary network/service issue.
       return { 
         valid: true, 
-        warning: true, 
-        error: 'CONTENT_VALIDATION_FAILED',
-        details: { error: err.message } 
+        warning: false, 
+        details: { technicalError: err.message } 
       };
     }
   });
@@ -343,6 +348,20 @@ export const deleteTempImage = async (path: string): Promise<void> => {
   }
 };
 
+// Helper to sanitize objects for Firestore (removes undefined)
+const sanitizeForFirestore = (obj: any): any => {
+  if (Array.isArray(obj)) {
+    return obj.map(v => sanitizeForFirestore(v));
+  } else if (obj !== null && typeof obj === 'object') {
+    return Object.fromEntries(
+      Object.entries(obj)
+        .filter(([_, v]) => v !== undefined)
+        .map(([k, v]) => [k, sanitizeForFirestore(v)])
+    );
+  }
+  return obj;
+};
+
 export const uploadImage = async (
   file: File, 
   validationResult: ValidationChainResult,
@@ -391,82 +410,34 @@ export const uploadImage = async (
       const compressedBlob = await compressImage(processedFile);
       const filename = `${sha256}.${processedFile.name.split('.').pop()}`;
       const storagePath = `generation_images/${userId}/${sessionId}/${filename}`;
+      const storageRef = ref(storage, storagePath);
+      const compressedPath = `generation_images/${userId}/${sessionId}/preview_${filename}`;
+      const compressedRef = ref(storage, compressedPath);
 
-      // ============================================
-      // UPLOAD VIA PROXY (to avoid CORS errors)
-      // ============================================
-      console.log('[Background] Converting files to base64 for proxy upload...');
-
-      // Convert original file to base64
-      const originalBase64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = reject;
-        reader.readAsDataURL(processedFile);
-      });
-
-      // Convert compressed blob to base64
-      const compressedBase64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = reject;
-        reader.readAsDataURL(compressedBlob);
-      });
-
-      // Upload via proxy endpoint
-      console.log('[Background] Uploading via proxy endpoint...');
-      const [originalProxyResponse, compressedProxyResponse] = await Promise.all([
-        axios.post('/api/storage/upload', {
-          base64: originalBase64,
-          path: `${storagePath}`
-        }),
-        axios.post('/api/storage/upload', {
-          base64: compressedBase64,
-          path: `${storagePath}.compressed`
-        })
+      // Perform uploads
+      const [originalResult, compressedResult] = await Promise.all([
+        uploadBytes(storageRef, processedFile),
+        uploadBytes(compressedRef, compressedBlob)
       ]);
-
-      // Get processed base64 from server
-      const originalProcessedBase64 = originalProxyResponse.data.base64;
-      const compressedProcessedBase64 = compressedProxyResponse.data.base64;
-
-      // Now need to upload processed base64 to Firebase using Client SDK
-      // For each processed base64, create blob and upload
-      const uploadProcessedToFirebase = async (base64: string, path: string) => {
-        try {
-          // Convert base64 data URL to Blob (browser-compatible, no Buffer!)
-          const response = await fetch(base64);
-          const blob = await response.blob();
-
-          const storageRef = ref(storage, path);
-          const snapshot = await uploadBytes(storageRef, blob);
-          return getDownloadURL(snapshot.ref);
-        } catch (err) {
-          console.error('[Background] Failed to upload processed image:', err);
-          throw err;
-        }
-      };
 
       const [originalUrl, compressedUrl] = await Promise.all([
-        uploadProcessedToFirebase(originalProcessedBase64, storagePath),
-        uploadProcessedToFirebase(compressedProcessedBase64, `${storagePath}.compressed`)
+        getDownloadURL(originalResult.ref),
+        getDownloadURL(compressedResult.ref)
       ]);
-
-      console.log('[Background] Uploads successful via proxy + Firebase ✅');
 
       // Save metadata
       const uploadId = `up_${Date.now()}`;
       const validationId = `val_${Date.now()}`;
 
       await Promise.all([
-        setDoc(doc(db, 'file_deduplication_index', sha256), {
+        setDoc(doc(db, 'file_deduplication_index', sha256), sanitizeForFirestore({
           fileHash: sha256,
           userId,
           originalStoragePath: storagePath,
           createdAt: new Date().toISOString(),
           reuseCount: 0
-        }),
-        setDoc(doc(db, 'image_uploads', uploadId), {
+        })),
+        setDoc(doc(db, 'image_uploads', uploadId), sanitizeForFirestore({
           id: uploadId,
           userId,
           originalFilename: file.name,
@@ -479,9 +450,9 @@ export const uploadImage = async (
           sha256,
           imageOriginalUrl: originalUrl,
           imageCompressedUrl: compressedUrl,
-          exif: validationResult.exif
-        }),
-        setDoc(doc(db, 'generation_sessions', sessionId), {
+          exif: validationResult.exif || null
+        })),
+        setDoc(doc(db, 'generation_sessions', sessionId), sanitizeForFirestore({
           id: sessionId,
           userId,
           imageOriginalUrl: originalUrl,
@@ -490,16 +461,16 @@ export const uploadImage = async (
           base64Image: base64Image || null,
           createdAt: new Date().toISOString(),
           scanStatus: 'pending'
-        }, { merge: true }),
-        setDoc(doc(db, 'file_validation_results', validationId), {
-          id: validationId,
-          userId,
-          fileHash: sha256,
+        }), { merge: true }),
+        setDoc(doc(db, 'file_validation_results', validationId), sanitizeForFirestore({
+          id: validationId || `val_${Date.now()}`,
+          userId: userId || 'anonymous',
+          fileHash: sha256 || 'unknown',
           validationTimestamp: new Date().toISOString(),
-          validationSteps: validationResult.steps,
-          validationPassed: validationResult.allValid,
-          validationErrors: validationResult.steps.filter(s => !s.valid).map(s => s.error)
-        })
+          validationSteps: validationResult.steps || [],
+          validationPassed: !!validationResult.allValid,
+          validationErrors: (validationResult.steps || []).filter(s => !s.valid).map(s => s.error || 'Unknown Validation Error')
+        }))
       ]);
 
       console.log('[Background] Upload and metadata saved successfully');
@@ -525,192 +496,4 @@ export const uploadImage = async (
       exif: validationResult.exif
     }
   };
-};
-
-// Cache for signed URLs (stores until 50 minutes)
-const signedUrlCache = new Map<string, { url: string; expiresAt: number }>();
-
-// Fallback cache for base64 (last resort)
-const base64Cache = new Map<string, string>();
-
-export const getSignedUrl = async (filePath: string): Promise<string> => {
-  try {
-    // Check cache first
-    const cached = signedUrlCache.get(filePath);
-    if (cached && cached.expiresAt > Date.now()) {
-      console.log('Returning cached signed URL for:', filePath);
-      return cached.url;
-    }
-
-    console.log('Requesting new signed URL for:', filePath);
-    const response = await axios.post('/api/storage/signed-url', {
-      filePath
-    });
-
-    if (!response.data.url) {
-      throw new Error('No signed URL returned');
-    }
-
-    // Cache for 50 minutes (3000 seconds)
-    const expiresAt = Date.now() + (50 * 60 * 1000);
-    signedUrlCache.set(filePath, {
-      url: response.data.url,
-      expiresAt
-    });
-
-    console.log('Signed URL obtained and cached for:', filePath);
-    return response.data.url;
-  } catch (error: any) {
-    console.error('Signed URL Error:', error.response?.data || error.message);
-    throw new Error(`SIGNED_URL_FAILED: ${error.message}`);
-  }
-};
-
-/**
- * Convert Firebase signed URL to proxy URL
- *
- * PROPÓSITO:
- * - Contornar CORS bloqueado
- * - Lidar com URLs assinadas expiradas
- * - Permitir fallback automático do servidor
- *
- * ENTRADA: Firebase signed URL (com token)
- * SAÍDA: Proxy URL que aponta para /api/storage/download/{path}
- *
- * SEGURANÇA:
- * - O proxy no backend valida acesso do usuário
- * - Não expõe credenciais da aplicação
- *
- * @param firebaseUrl Firebase signed URL
- * @returns Proxy URL para uso seguro no cliente
- */
-export const getProxyUrl = (firebaseUrl: string): string => {
-  try {
-    // Parse Firebase URL to extract bucket and path
-    // Format: https://firebasestorage.googleapis.com/v0/b/{bucket}/o/{path}?alt=media&token=...
-    const url = new URL(firebaseUrl);
-    const pathMatch = firebaseUrl.match(/\/o\/([^?]+)/);
-
-    if (!pathMatch || !pathMatch[1]) {
-      throw new Error('Invalid Firebase URL format');
-    }
-
-    const encodedPath = pathMatch[1];
-    const decodedPath = decodeURIComponent(encodedPath);
-
-    // Convert to proxy URL - será tratado pelo backend
-    const proxyUrl = `/api/storage/download/${decodedPath}`;
-    console.log('Converted Firebase URL to proxy URL:', proxyUrl);
-    return proxyUrl;
-  } catch (error: any) {
-    console.error('Proxy URL Conversion Error:', error.message);
-    throw new Error(`PROXY_URL_CONVERSION_FAILED: ${error.message}`);
-  }
-};
-
-/**
- * Obter base64 armazenado em cache para fallback
- *
- * PROPÓSITO:
- * - Último recurso se URLs falharem
- * - Armazenar base64 em memória durante sessão
- * - Permitir retry sem novo upload
- *
- * CASOS DE USO:
- * 1. URL expirada no meio da geração
- * 2. Erro de CORS em proxy URL
- * 3. Falha temporária de rede
- *
- * LIMITAÇÕES:
- * - Armazenamento em memória (não persiste)
- * - Não é seguro para dados sensíveis
- * - Usa espaço de memória do cliente
- *
- * @param filePath Caminho do arquivo (opcional)
- * @returns Base64 string ou null
- */
-export const getBase64Fallback = (filePath?: string): string | null => {
-  try {
-    if (filePath && base64Cache.has(filePath)) {
-      console.log('Returning base64 fallback for:', filePath);
-      return base64Cache.get(filePath) || null;
-    }
-
-    // Return first cached base64 if no path specified (emergency mode)
-    if (base64Cache.size > 0) {
-      const fallbackBase64 = base64Cache.values().next().value;
-      console.log('Returning emergency base64 fallback');
-      return fallbackBase64;
-    }
-
-    console.warn('No base64 fallback available');
-    return null;
-  } catch (error: any) {
-    console.error('Base64 Fallback Error:', error.message);
-    return null;
-  }
-};
-
-export const uploadBase64ViaProxy = async (base64: string, path?: string): Promise<string> => {
-  const filePath = path || `temp_generation/${Date.now()}`;
-
-  try {
-    // Strategy 1: Try signed URL first
-    console.log('Attempting signed URL upload...');
-    try {
-      const signedUrl = await getSignedUrl(filePath);
-      console.log('Using signed URL for upload');
-      return signedUrl;
-    } catch (signedUrlError) {
-      console.warn('Signed URL failed, attempting fallback:', signedUrlError);
-    }
-
-    // Strategy 2: Try proxy upload + Client SDK upload
-    console.log('Attempting proxy processing + Client SDK upload...');
-    try {
-      // Step 1: Get processed base64 from proxy
-      const response = await axios.post('/api/storage/upload', {
-        base64,
-        path: filePath
-      });
-
-      if (!response.data.base64) {
-        throw new Error('No base64 returned from proxy');
-      }
-
-      const processedBase64 = response.data.base64;
-      console.log('Proxy processing successful, uploading to Firebase via Client SDK...');
-
-      // Step 2: Upload processed base64 to Firebase using Client SDK (fetch + blob, no Buffer!)
-      console.log('Uploading processed image to Firebase via Client SDK...');
-
-      try {
-        const response = await fetch(processedBase64);
-        const blob = await response.blob();
-
-        const storageRef = ref(storage, filePath);
-        const uploadSnapshot = await uploadBytes(storageRef, blob);
-        const downloadURL = await getDownloadURL(uploadSnapshot.ref);
-
-        console.log('Client SDK upload successful, returning URL');
-        return downloadURL;
-      } catch (uploadErr) {
-        console.error('Client SDK upload failed:', uploadErr);
-        throw uploadErr;
-      }
-    } catch (proxyError: any) {
-      console.warn('Proxy + Client SDK upload failed:', proxyError.message);
-    }
-
-    // Strategy 3: Cache base64 as last resort
-    console.log('Caching base64 as last resort...');
-    base64Cache.set(filePath, base64);
-    console.warn('Upload failed. Base64 cached for emergency fallback');
-
-    // Return a pseudo-URL indicating cached status
-    throw new Error('UPLOAD_FAILED_BASE64_CACHED');
-  } catch (error: any) {
-    console.error('Upload Base64 Via Proxy Error:', error.message);
-    throw new Error(`STORAGE_UPLOAD_FAILED: ${error.message}`);
-  }
 };

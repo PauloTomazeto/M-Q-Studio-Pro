@@ -35,7 +35,7 @@ function cn(...inputs: ClassValue[]) {
 }
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB
-const MIN_FILE_SIZE = 1 * 1024 * 1024; // 1MB
+const MIN_FILE_SIZE = 300 * 1024; // 300KB
 const ALLOWED_FORMATS = ['image/jpeg', 'image/png', 'image/webp', 'image/heic'];
 const MIN_DIMENSIONS = { width: 800, height: 600 };
 const MAX_DIMENSIONS = { width: 8000, height: 8000 };
@@ -66,7 +66,7 @@ const UploadStep: React.FC = () => {
     if (!err) return '';
     const messages: Record<string, string> = {
       'UNSUPPORTED_FORMAT': 'Formato de arquivo não suportado. Use JPG, PNG, WebP, HEIC ou TIFF.',
-      'FILE_TOO_SMALL': 'O arquivo é muito pequeno. O tamanho mínimo é 1MB.',
+      'FILE_TOO_SMALL': 'O arquivo é muito pequeno. O tamanho mínimo é 300KB.',
       'FILE_TOO_LARGE': 'O arquivo é muito grande. O tamanho máximo é 20MB.',
       'IMAGE_TOO_SMALL_PIXELS': 'A resolução da imagem é muito baixa. Mínimo de 800x600px.',
       'IMAGE_TOO_LARGE_PIXELS': 'A resolução da imagem é muito alta. Máximo de 8000x8000px.',
@@ -235,7 +235,7 @@ const UploadStep: React.FC = () => {
               </div>
               <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-muted">
                 <Info className="w-4 h-4" />
-                1MB - 20MB
+                300KB - 20MB
               </div>
               <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-muted">
                 <Maximize2 className="w-4 h-4" />

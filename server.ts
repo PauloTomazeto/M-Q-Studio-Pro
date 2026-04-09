@@ -4,21 +4,8 @@ import path from "path";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import axios from "axios";
-import admin from "firebase-admin";
-dotenv.config();
 
-// Initialize Firebase Admin with credentials if available
-if (!admin.apps.length) {
-  try {
-    admin.initializeApp({
-      projectId: process.env.VITE_FIREBASE_PROJECT_ID || "gen-lang-client-0425317525",
-      storageBucket: process.env.VITE_FIREBASE_STORAGE_BUCKET || "gen-lang-client-0425317525.firebasestorage.app"
-    });
-    console.log("[Firebase Admin] Initialized Successfully");
-  } catch (err: any) {
-    console.error("[Firebase Admin] Initialization Error:", err.message);
-  }
-}
+dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -26,365 +13,59 @@ const __dirname = path.dirname(__filename);
 async function startServer() {
   const app = express();
   const PORT = 3000;
-  const KIE_API_KEY = process.env.KIE_API_KEY || "b7e6d04e2b37c593a0f8dac63ef612e9";
 
   app.use(express.json({ limit: '50mb' }));
 
-  // KIE API Proxy Endpoints
-  app.post("/api/kie/gemini", async (req, res) => {
-    console.log(`[KIE Proxy] Request to Gemini API. Key suffix: ...${KIE_API_KEY.slice(-4)}`);
+  // KIE API Proxy
+  app.all("/api/kie/*", async (req, res) => {
     try {
-      const response = await axios.post(
-        "https://api.kie.ai/gemini-3.1-pro/v1/chat/completions",
-        req.body,
-        {
-          headers: {
-            Authorization: `Bearer ${KIE_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-          timeout: 120000 // 120s timeout for AI response
-        }
-      );
-      console.log("[KIE Proxy] Gemini API Success");
-      res.json(response.data);
-    } catch (error: any) {
-      const status = error.response?.status || 500;
-      const errorData = error.response?.data || error.message;
-      console.error(`[KIE Proxy] Gemini API Error (${status}):`, JSON.stringify(errorData));
-      res.status(status).json(errorData);
-    }
-  });
+      const subPath = req.params[0];
+      const apiKey = process.env.KIE_API_KEY || "b7e6d04e2b37c593a0f8dac63ef612e9";
+      const targetUrl = `https://api.kie.ai/${subPath}`;
 
-  app.post("/api/kie/kling", async (req, res) => {
-    try {
-      const response = await axios.post(
-        "https://api.kie.ai/api/v1/jobs/createTask",
-        req.body,
-        {
-          headers: {
-            Authorization: `Bearer ${KIE_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-      res.json(response.data);
-    } catch (error: any) {
-      console.error("KIE Kling Error:", error.response?.data || error.message);
-      res.status(error.response?.status || 500).json(error.response?.data || { error: "Internal Server Error" });
-    }
-  });
+      console.log(`Proxying ${req.method} request to KIE: ${targetUrl}`);
 
-  app.get("/api/kie/kling/status/:taskId", async (req, res) => {
-    try {
-      const response = await axios.get(
-        `https://api.kie.ai/api/v1/jobs/getTask?taskId=${req.params.taskId}`,
-        {
-          headers: {
-            Authorization: `Bearer ${KIE_API_KEY}`,
-          },
-        }
-      );
-      res.json(response.data);
-    } catch (error: any) {
-      console.error("KIE Kling Status Error:", error.response?.data || error.message);
-      res.status(error.response?.status || 500).json(error.response?.data || { error: "Internal Server Error" });
-    }
-  });
-
-  // Nano Banana endpoints
-  app.post("/api/kie/nano-banana/create", async (req, res) => {
-    console.log("[KIE Proxy] Nano Banana Create Task:", {
-      model: req.body.model,
-      promptLength: req.body.input?.prompt?.length,
-      imageCount: req.body.input?.image_input?.length,
-      resolution: req.body.input?.resolution,
-      aspect_ratio: req.body.input?.aspect_ratio
-    });
-    try {
-      const response = await axios.post(
-        "https://api.kie.ai/api/v1/jobs/createTask",
-        req.body,
-        {
-          headers: {
-            Authorization: `Bearer ${KIE_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-      console.log("[KIE Proxy] Nano Banana Success:", response.data.code);
-      res.json(response.data);
-    } catch (error: any) {
-      const status = error.response?.status || 500;
-      const errorData = error.response?.data || error.message;
-      console.error(`[KIE Proxy] Nano Banana Error (${status}):`, JSON.stringify(errorData));
-      res.status(status).json(errorData);
-    }
-  });
-
-  app.get("/api/kie/nano-banana/status/:taskId", async (req, res) => {
-    try {
-      const response = await axios.get(
-        `https://api.kie.ai/api/v1/jobs/getTask?taskId=${req.params.taskId}`,
-        {
-          headers: {
-            Authorization: `Bearer ${KIE_API_KEY}`,
-          },
-        }
-      );
-      res.json(response.data);
-    } catch (error: any) {
-      console.error("KIE Nano Banana Status Error:", error.response?.data || error.message);
-      res.status(error.response?.status || 500).json(error.response?.data || { error: "Internal Server Error" });
-    }
-  });
-  
-  // Python Image Processing Proxy - Process images and return processed base64
-  app.post("/api/storage/upload", async (req, res) => {
-    const { base64, path: storagePath } = req.body;
-
-    if (!base64) {
-      return res.status(400).json({ error: "Missing base64 data" });
-    }
-
-    let processedBase64 = base64;
-    let wasPythonProcessed = false;
-
-    try {
-      console.log(`[Storage Proxy] Processing image for: ${storagePath || 'temp_gen'}`);
-
-      // ============================================
-      // Tentar processar via Python (opcional)
-      // ============================================
-      try {
-        console.log("[Storage Proxy] Attempting Python image processing...");
-        const pythonResponse = await axios.post(
-          "http://127.0.0.1:5000/process",
-          {
-            base64: base64,
-            filename: `${storagePath || 'temp_generation'}_${Date.now()}.jpg`
-          },
-          { timeout: 10000 }
-        );
-
-        if (pythonResponse.data.status === "success" && pythonResponse.data.base64) {
-          processedBase64 = pythonResponse.data.base64;
-          wasPythonProcessed = true;
-          console.log("[Storage Proxy] Python processing successful ✅");
-        }
-      } catch (pythonError: any) {
-        // Python falhou ou não está rodando - isso é OK, continua com base64 original
-        console.warn("[Storage Proxy] Python processing failed (usando base64 original):", pythonError.message);
-      }
-
-      // Retornar base64 processado para cliente fazer upload via Client SDK
-      console.log("[Storage Proxy] Returning processed base64 to client");
-      res.json({
-        base64: processedBase64,
-        processed: wasPythonProcessed,
-        message: "Image processed. Client should upload to Firebase using Client SDK."
-      });
-    } catch (error: any) {
-      console.error("[Storage Proxy] Processing Error:", error.message);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // Firebase Storage Proxy Download - Resolve CORS issue
-  app.get("/api/storage/download/:path(*)", async (req, res) => {
-    const filePath = req.params.path;
-
-    if (!filePath) {
-      return res.status(400).json({ error: "Missing file path" });
-    }
-
-    try {
-      console.log(`[Storage Proxy] Downloading: ${filePath}`);
-
-      const bucket = admin.storage().bucket();
-      const file = bucket.file(filePath);
-
-      // Check if file exists
-      const [exists] = await file.exists();
-      if (!exists) {
-        console.warn(`[Storage Proxy] File not found: ${filePath}`);
-        return res.status(404).json({ error: "File not found" });
-      }
-
-      // Get file metadata for content type and caching
-      const [metadata] = await file.getMetadata();
-      const contentType = metadata.contentType || "application/octet-stream";
-      const contentLength = metadata.size || 0;
-
-      // Set CORS and cache headers
-      res.set({
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Range",
-        "Content-Type": contentType,
-        "Content-Length": contentLength.toString(),
-        "Cache-Control": "public, max-age=31536000", // 1 year for immutable files
-        "Cross-Origin-Resource-Sharing": "enabled"
+      const response = await axios({
+        method: req.method,
+        url: targetUrl,
+        data: req.body,
+        params: req.query,
+        headers: {
+          "Authorization": `Bearer ${apiKey}`,
+          "x-api-key": apiKey,
+          "Content-Type": "application/json"
+        },
+        timeout: 180000 // Increased to 180s for very slow responses
       });
 
-      // Stream file to response
-      const readStream = file.createReadStream();
-
-      readStream.on("error", (error: any) => {
-        console.error(`[Storage Proxy] Stream Error for ${filePath}:`, error.message);
-        if (!res.headersSent) {
-          res.status(500).json({ error: "Failed to read file" });
-        }
-      });
-
-      readStream.pipe(res);
+      console.log(`KIE Response Status: ${response.status}`);
+      res.status(response.status).json(response.data);
     } catch (error: any) {
-      console.error("[Storage Proxy] Download Error:", error.message);
-      if (!res.headersSent) {
-        res.status(500).json({ error: error.message });
+      console.error("KIE Proxy Error:", error.message);
+      if (error.response) {
+        const errorData = error.response.data;
+        const responsePayload = typeof errorData === 'string' && errorData.includes('<!doctype html>') 
+          ? { error: "KIE_API_HTML_ERROR", message: "Target API returned HTML instead of JSON", raw: errorData.substring(0, 500) }
+          : errorData;
+        res.status(error.response.status).json(responsePayload);
+      } else if (error.code === 'ECONNABORTED') {
+        res.status(504).json({ error: "Gateway Timeout", message: "KIE API took too long to respond (180s limit)" });
+      } else {
+        res.status(500).json({ error: "Internal Server Error", message: error.message, code: error.code });
       }
     }
   });
 
-  // Cache Local - Serve cached images from /cache/images/
-  app.get("/api/cache/image/:imageId(*)", async (req, res) => {
-    const imageId = req.params.imageId;
-
-    if (!imageId) {
-      return res.status(400).json({ error: "Missing imageId parameter" });
-    }
-
-    try {
-      console.log(`[Cache] Serving image: ${imageId}`);
-
-      const fs = require('fs');
-      const path = require('path');
-
-      // Construct path to cached image
-      const cacheDir = path.join(process.cwd(), 'cache', 'images');
-      const imagePath = path.join(cacheDir, imageId);
-
-      // Security: Prevent path traversal attacks
-      if (!imagePath.startsWith(cacheDir)) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-
-      // Check if file exists
-      if (!fs.existsSync(imagePath)) {
-        console.warn(`[Cache] Image not found: ${imageId}`);
-        return res.status(404).json({ error: "Image not found" });
-      }
-
-      // Get file stats for content length
-      const stats = fs.statSync(imagePath);
-      const contentType = "image/jpeg"; // Cache sempre salva JPEG
-
-      // Set headers (CORS-safe, localhost)
-      res.set({
-        "Content-Type": contentType,
-        "Content-Length": stats.size.toString(),
-        "Cache-Control": "public, max-age=86400", // 24 horas de cache
-        "Access-Control-Allow-Origin": "*"
-      });
-
-      // Stream file to response
-      const readStream = fs.createReadStream(imagePath);
-
-      readStream.on("error", (error: any) => {
-        console.error(`[Cache] Stream Error for ${imageId}:`, error.message);
-        if (!res.headersSent) {
-          res.status(500).json({ error: "Failed to read file" });
-        }
-      });
-
-      readStream.pipe(res);
-      console.log(`[Cache] Served: ${imageId} (${stats.size} bytes)`);
-    } catch (error: any) {
-      console.error("[Cache] Serve Error:", error.message);
-      if (!res.headersSent) {
-        res.status(500).json({ error: error.message });
-      }
-    }
+  // Stripe Integration Preparation
+  app.post("/api/stripe/create-checkout-session", async (req, res) => {
+    const { planId, userId, email } = req.body;
+    // This will be implemented when Stripe API key is provided
+    res.json({ url: 'https://checkout.stripe.com/pay/placeholder' });
   });
 
-  // Firebase Storage Generate Signed URL - For authenticated downloads
-  app.post("/api/storage/signed-url", async (req, res) => {
-    const { filePath } = req.body;
-
-    if (!filePath) {
-      return res.status(400).json({ error: "Missing filePath in request body" });
-    }
-
-    try {
-      console.log(`[Storage Proxy] Generating signed URL for: ${filePath}`);
-
-      const bucket = admin.storage().bucket();
-      const file = bucket.file(filePath);
-
-      // Check if file exists
-      const [exists] = await file.exists();
-      if (!exists) {
-        console.warn(`[Storage Proxy] File not found for signed URL: ${filePath}`);
-        return res.status(404).json({ error: "File not found" });
-      }
-
-      // Generate signed URL valid for 1 hour
-      const [signedUrl] = await file.getSignedUrl({
-        version: "v4",
-        action: "read",
-        expires: Date.now() + 60 * 60 * 1000, // 1 hour
-      });
-
-      console.log(`[Storage Proxy] Signed URL generated successfully for: ${filePath}`);
-      res.json({
-        signedUrl,
-        expiresIn: 3600, // seconds
-        filePath
-      });
-    } catch (error: any) {
-      console.error("[Storage Proxy] Signed URL Error:", error.message);
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // Firebase Storage Validate Access - Check file accessibility
-  app.post("/api/storage/validate", async (req, res) => {
-    const { fileId } = req.body;
-
-    if (!fileId) {
-      return res.status(400).json({ error: "Missing fileId in request body" });
-    }
-
-    try {
-      console.log(`[Storage Proxy] Validating access for: ${fileId}`);
-
-      const bucket = admin.storage().bucket();
-      const file = bucket.file(fileId);
-
-      // Check if file exists
-      const [exists] = await file.exists();
-
-      // Try to get metadata to verify accessibility
-      let accessible = false;
-      if (exists) {
-        try {
-          await file.getMetadata();
-          accessible = true;
-        } catch (metadataError: any) {
-          console.warn(`[Storage Proxy] Metadata access denied for ${fileId}:`, metadataError.message);
-          accessible = false;
-        }
-      }
-
-      console.log(`[Storage Proxy] Validation result for ${fileId}: exists=${exists}, accessible=${accessible}`);
-      res.json({
-        exists,
-        accessible,
-        fileId
-      });
-    } catch (error: any) {
-      console.error("[Storage Proxy] Validate Error:", error.message);
-      res.status(500).json({ error: error.message });
-    }
+  app.post("/api/stripe/webhook", express.raw({ type: 'application/json' }), (req, res) => {
+    // This will handle Stripe webhooks to update user plans in Firestore
+    res.json({ received: true });
   });
 
   // Vite middleware for development

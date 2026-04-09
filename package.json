@@ -11,7 +11,7 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@google/genai": "^1.29.0",
+    "@google/genai": "^1.48.0",
     "@tailwindcss/vite": "^4.1.14",
     "@types/canvas-confetti": "^1.9.0",
     "@types/uuid": "^10.0.0",
@@ -23,9 +23,7 @@
     "exif-js": "^2.3.0",
     "express": "^4.21.2",
     "firebase": "^12.11.0",
-    "firebase-admin": "^13.7.0",
     "framer-motion": "^12.38.0",
-    "git": "^0.1.5",
     "heic2any": "^0.0.4",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
