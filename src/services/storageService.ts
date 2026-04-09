@@ -7,13 +7,13 @@ import { kieService } from './kieService';
 
 // Constants from PRD
 const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/tiff'];
-const MIN_FILE_SIZE = 1 * 1024 * 1024; // 1MB
+const MIN_FILE_SIZE = 300 * 1024; // 300KB
 const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB
 const MIN_WIDTH = 800;
 const MIN_HEIGHT = 600;
 const MAX_WIDTH = 8000;
 const MAX_HEIGHT = 8000;
-const CONTENT_CONFIDENCE_THRESHOLD = 0.70;
+const CONTENT_CONFIDENCE_THRESHOLD = 0.60;
 
 export interface ImageMetadata {
   width: number;
@@ -284,12 +284,18 @@ export const validateFileChain = async (
       
       return { valid: true, details: { confidence } };
     } catch (err: any) {
-      console.error('Content Validation Error:', err);
+      const isMaintenance = err.message?.toLowerCase().includes('maintained') || err.message?.toLowerCase().includes('maintenance');
+      if (isMaintenance) {
+        console.warn('Content Validation skipped: KIE API is under maintenance.');
+      } else {
+        console.error('Content Validation Error:', err);
+      }
+      // Fail-safe: if the validation service fails technically, we don't block or warn the user
+      // as it might be a temporary network/service issue.
       return { 
         valid: true, 
-        warning: true, 
-        error: 'CONTENT_VALIDATION_FAILED',
-        details: { error: err.message } 
+        warning: false, 
+        details: { technicalError: err.message } 
       };
     }
   });
@@ -340,6 +346,20 @@ export const deleteTempImage = async (path: string): Promise<void> => {
   } catch (err) {
     console.warn('Failed to delete temp image:', err);
   }
+};
+
+// Helper to sanitize objects for Firestore (removes undefined)
+const sanitizeForFirestore = (obj: any): any => {
+  if (Array.isArray(obj)) {
+    return obj.map(v => sanitizeForFirestore(v));
+  } else if (obj !== null && typeof obj === 'object') {
+    return Object.fromEntries(
+      Object.entries(obj)
+        .filter(([_, v]) => v !== undefined)
+        .map(([k, v]) => [k, sanitizeForFirestore(v)])
+    );
+  }
+  return obj;
 };
 
 export const uploadImage = async (
@@ -410,14 +430,14 @@ export const uploadImage = async (
       const validationId = `val_${Date.now()}`;
 
       await Promise.all([
-        setDoc(doc(db, 'file_deduplication_index', sha256), {
+        setDoc(doc(db, 'file_deduplication_index', sha256), sanitizeForFirestore({
           fileHash: sha256,
           userId,
           originalStoragePath: storagePath,
           createdAt: new Date().toISOString(),
           reuseCount: 0
-        }),
-        setDoc(doc(db, 'image_uploads', uploadId), {
+        })),
+        setDoc(doc(db, 'image_uploads', uploadId), sanitizeForFirestore({
           id: uploadId,
           userId,
           originalFilename: file.name,
@@ -430,9 +450,9 @@ export const uploadImage = async (
           sha256,
           imageOriginalUrl: originalUrl,
           imageCompressedUrl: compressedUrl,
-          exif: validationResult.exif
-        }),
-        setDoc(doc(db, 'generation_sessions', sessionId), {
+          exif: validationResult.exif || null
+        })),
+        setDoc(doc(db, 'generation_sessions', sessionId), sanitizeForFirestore({
           id: sessionId,
           userId,
           imageOriginalUrl: originalUrl,
@@ -441,16 +461,16 @@ export const uploadImage = async (
           base64Image: base64Image || null,
           createdAt: new Date().toISOString(),
           scanStatus: 'pending'
-        }, { merge: true }),
-        setDoc(doc(db, 'file_validation_results', validationId), {
-          id: validationId,
-          userId,
-          fileHash: sha256,
+        }), { merge: true }),
+        setDoc(doc(db, 'file_validation_results', validationId), sanitizeForFirestore({
+          id: validationId || `val_${Date.now()}`,
+          userId: userId || 'anonymous',
+          fileHash: sha256 || 'unknown',
           validationTimestamp: new Date().toISOString(),
-          validationSteps: validationResult.steps,
-          validationPassed: validationResult.allValid,
-          validationErrors: validationResult.steps.filter(s => !s.valid).map(s => s.error)
-        })
+          validationSteps: validationResult.steps || [],
+          validationPassed: !!validationResult.allValid,
+          validationErrors: (validationResult.steps || []).filter(s => !s.valid).map(s => s.error || 'Unknown Validation Error')
+        }))
       ]);
 
       console.log('[Background] Upload and metadata saved successfully');

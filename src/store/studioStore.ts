@@ -5,14 +5,22 @@ import { validateMaterial } from '../utils/materialUtils';
 
 export type StudioMode = 'prompt' | 'move';
 export type Step = 'select' | 'upload' | 'diagnosis' | 'config' | 'result' | 'generate';
+export type UserPlan = 'basic' | 'pro' | 'premium';
 
 interface StudioState {
   mode: StudioMode | null;
   currentStep: Step;
+  userPlan: UserPlan;
+  userCredits: {
+    image: number;
+    video: number;
+    proImage: number;
+  };
   image: string | null;
   base64Image: string | null;
   imageMetadata: any | null;
   sessionId: string | null;
+  projectId: string | null;
   scanResult: any | null;
   scanStatus: 'pending' | 'processing' | 'completed' | 'failed' | null;
   scanErrors: string[] | null;
@@ -68,6 +76,7 @@ interface StudioState {
     promptMode: 'single' | 'blocks';
     topDownAngle: number;
     environmentType: string;
+    humanizationStyle: 'MINIMALISTA' | 'TROPICAL' | 'CONTEMPORANEO';
     atmosphere_type: 'clear' | 'cloudy' | 'overcast' | 'sunset' | 'night' | 'dramatic' | 'foggy';
     fog_density: number;
     fog_color: string;
@@ -81,6 +90,8 @@ interface StudioState {
     bloom_quality: 'low' | 'medium' | 'high';
     color_temperature_source: 'detected' | 'preset' | 'manual';
     color_temperature_preset_name: string | null;
+    cameraSelection: string | null;
+    styleCode: string | null;
   };
   generatedPrompt: string | null;
   generatedBlocks: any[] | null;
@@ -103,14 +114,16 @@ interface StudioState {
   
   // Image Generation State
   selectedModel: 'nano-banana-2' | 'nano-banana-pro';
-  selectedResolution: '1K' | '2K' | '4K';
+  selectedResolution: '1K' | '2K' | '3K';
   selectedAspectRatio: '1:1' | '16:9' | '9:16' | '5:4' | '4:5' | '3:4' | '4:3';
   generationTask: {
     taskId: string;
+    generationId?: string;
     status: 'queued' | 'processing' | 'preview_ready' | 'completed' | 'failed' | 'cancelled';
     progress: number;
     stage?: string;
     resultUrl?: string;
+    previewUrl?: string;
     error?: string;
     estimatedTimeRemaining?: number;
     startTime?: number;
@@ -123,6 +136,7 @@ interface StudioState {
   setImage: (image: string | null, metadata?: any) => void;
   setBase64Image: (base64: string | null) => void;
   setSessionId: (id: string | null) => void;
+  setProjectId: (id: string | null) => void;
   setScanResult: (result: any, durationMs?: number) => void;
   setScanStatus: (status: 'pending' | 'processing' | 'completed' | 'failed') => void;
   setScanErrors: (errors: string[] | null) => void;
@@ -164,11 +178,14 @@ interface StudioState {
   
   // Image Generation Actions
   setSelectedModel: (model: 'nano-banana-2' | 'nano-banana-pro') => void;
-  setSelectedResolution: (resolution: '1K' | '2K' | '4K') => void;
+  setSelectedResolution: (resolution: '1K' | '2K' | '3K') => void;
   setSelectedAspectRatio: (ratio: '1:1' | '16:9' | '9:16' | '5:4' | '4:5' | '3:4' | '4:3') => void;
   setGenerationTask: (task: any | null) => void;
   setIsGenerating: (isGenerating: boolean) => void;
   setMirrorImage: (image: string | null) => void;
+  loadProject: (project: any) => void;
+  setUserPlan: (plan: UserPlan) => void;
+  setUserCredits: (credits: Partial<StudioState['userCredits']>) => void;
   
   reset: () => void;
 }
@@ -176,10 +193,17 @@ interface StudioState {
 export const useStudioStore = create<StudioState>((set) => ({
   mode: sessionStorage.getItem('studioMode') as StudioMode | null,
   currentStep: 'select',
+  userPlan: 'basic',
+  userCredits: {
+    image: 0,
+    video: 0,
+    proImage: 0,
+  },
   image: null,
   base64Image: null,
   imageMetadata: null,
   sessionId: null,
+  projectId: null,
   scanResult: null,
   scanStatus: null,
   scanErrors: null,
@@ -231,6 +255,7 @@ export const useStudioStore = create<StudioState>((set) => ({
     promptMode: 'single',
     topDownAngle: 90,
     environmentType: 'URBANO',
+    humanizationStyle: 'CONTEMPORANEO',
     atmosphere_type: 'clear',
     fog_density: 0,
     fog_color: '#ffffff',
@@ -244,6 +269,8 @@ export const useStudioStore = create<StudioState>((set) => ({
     bloom_quality: 'high',
     color_temperature_source: 'detected',
     color_temperature_preset_name: null,
+    cameraSelection: null,
+    styleCode: 'contemp',
   },
   generatedPrompt: null,
   generatedBlocks: null,
@@ -275,6 +302,7 @@ export const useStudioStore = create<StudioState>((set) => ({
   setImage: (image, imageMetadata) => set({ image, imageMetadata }),
   setBase64Image: (base64Image) => set({ base64Image }),
   setSessionId: (sessionId) => set({ sessionId }),
+  setProjectId: (projectId) => set({ projectId }),
   setScanResult: (scanResult, scanDurationMs) => {
     const rawMaterials = scanResult?.materials || [];
     const validatedMaterials = rawMaterials.map((m: any, i: number) => {
@@ -515,6 +543,26 @@ export const useStudioStore = create<StudioState>((set) => ({
   setGenerationTask: (generationTask) => set({ generationTask }),
   setIsGenerating: (isGenerating) => set({ isGenerating }),
   setMirrorImage: (mirrorImage) => set({ mirrorImage }),
+  setUserPlan: (userPlan) => set({ userPlan }),
+  setUserCredits: (credits) => set((state) => ({
+    userCredits: { ...state.userCredits, ...credits }
+  })),
+
+  loadProject: (project: any) => {
+    set({
+      image: project.originalImage,
+      base64Image: project.originalImage,
+      scanResult: project.scanResult,
+      materials: project.materials || [],
+      ambientLight: project.ambientLight,
+      lightPoints: project.lightPoints || [],
+      configParams: project.configParams,
+      generatedPrompt: project.prompt,
+      sessionId: project.id,
+      projectId: project.id,
+      currentStep: 'config'
+    });
+  },
 
   reset: () => set({
     mode: null,
@@ -523,6 +571,7 @@ export const useStudioStore = create<StudioState>((set) => ({
     base64Image: null,
     imageMetadata: null,
     sessionId: null,
+    projectId: null,
     scanResult: null,
     scanStatus: null,
     scanErrors: null,

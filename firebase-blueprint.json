@@ -1,5 +1,19 @@
 {
   "entities": {
+    "UsageLog": {
+      "title": "UsageLog",
+      "description": "A log entry for an API request",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "type": { "type": "string", "enum": ["prompt", "scan", "read", "image", "video"] },
+        "model": { "type": "string" },
+        "resolution": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "metadata": { "type": "object" }
+      },
+      "required": ["userId", "type", "timestamp"]
+    },
     "UserProfile": {
       "title": "UserProfile",
       "description": "User account information and credits",
@@ -12,6 +26,9 @@
         "role": { "type": "string", "enum": ["admin", "user"] },
         "plan": { "type": "string", "enum": ["basic", "pro", "premium"] },
         "credits": { "type": "integer" },
+        "subscriptionStatus": { "type": "string", "enum": ["active", "inactive", "canceled", "trialing"] },
+        "subscriptionId": { "type": "string" },
+        "stripeCustomerId": { "type": "string" },
         "monthlySpent": { "type": "integer" },
         "monthlyLimit": { "type": "integer" },
         "resetDate": { "type": "string", "format": "date-time" },
@@ -38,20 +55,57 @@
     },
     "ImageGeneration": {
       "title": "ImageGeneration",
-      "description": "A single image generation result",
+      "description": "A single image generation result with full tracking",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
-        "projectId": { "type": "string" },
         "userId": { "type": "string" },
-        "prompt": { "type": "string" },
-        "status": { "type": "string" },
-        "resolution": { "type": "string" },
-        "imageUrls": { "type": "object" },
+        "sessionId": { "type": "string" },
+        "promptConfigId": { "type": "string" },
+        "promptContent": { "type": "string" },
+        "generationStatus": { "type": "string", "enum": ["queued", "processing", "preview_ready", "completed", "failed", "cancelled"] },
+        "progressPercentage": { "type": "integer" },
+        "progressStage": { "type": "string" },
+        "estimatedTimeRemainingSeconds": { "type": "integer" },
+        "currentResolution": { "type": "string", "enum": ["1k", "2k", "3k"] },
+        "imageUrlPreview": { "type": "string" },
+        "imageUrl1k": { "type": "string" },
+        "imageUrl2k": { "type": "string" },
+        "imageUrl3k": { "type": "string" },
+        "generationDurationSeconds": { "type": "integer" },
+        "kieApiModel": { "type": "string" },
+        "kieApiRequestId": { "type": "string" },
+        "kieApiStatus": { "type": "string" },
+        "isPreviewReady": { "type": "boolean" },
+        "isCompleted": { "type": "boolean" },
         "creditsCost": { "type": "integer" },
+        "creditsDeducted": { "type": "boolean" },
+        "errorMessage": { "type": "string" },
+        "errorCode": { "type": "string" },
+        "retryCount": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "startedAt": { "type": "string", "format": "date-time" },
+        "completedAt": { "type": "string", "format": "date-time" },
+        "userAgent": { "type": "string" },
+        "ipAddress": { "type": "string" },
+        "isFavorite": { "type": "boolean" }
+      },
+      "required": ["id", "userId", "sessionId", "promptContent", "generationStatus"]
+    },
+    "CreditAuditLog": {
+      "title": "CreditAuditLog",
+      "description": "Audit log for credit transactions",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "amount": { "type": "integer" },
+        "type": { "type": "string", "enum": ["debit", "credit", "refund"] },
+        "reason": { "type": "string" },
+        "referenceId": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["id", "projectId", "userId", "prompt", "status"]
+      "required": ["id", "userId", "amount", "type", "reason", "createdAt"]
     },
     "ImageUpload": {
       "title": "ImageUpload",
@@ -211,6 +265,21 @@
         "qualityScore": { "type": "integer" }
       },
       "required": ["version", "content", "editedBy", "timestamp"]
+    },
+    "PlanConfig": {
+      "title": "PlanConfig",
+      "description": "Configuration for subscription plans",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "price": { "type": "number" },
+        "credits": { "type": "integer" },
+        "features": { "type": "array", "items": { "type": "string" } },
+        "stripePriceId": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "price", "credits"]
     }
   },
   "firestore": {
@@ -233,6 +302,14 @@
     "/scan_results/{scanId}": {
       "schema": "ScanResult",
       "description": "Architectural analysis results"
+    },
+    "/image_generations/{generationId}": {
+      "schema": "ImageGeneration",
+      "description": "All image generations"
+    },
+    "/credit_audit_logs/{logId}": {
+      "schema": "CreditAuditLog",
+      "description": "Credit transaction logs"
     },
     "/projects/{projectId}": {
       "schema": "Project",
@@ -265,6 +342,14 @@
     "/validation_logs/{logId}": {
       "schema": "ValidationLog",
       "description": "Detailed logs for each validation step"
+    },
+    "/plans/{planId}": {
+      "schema": "PlanConfig",
+      "description": "Global plan configuration and pricing"
+    },
+    "/usage_logs/{logId}": {
+      "schema": "UsageLog",
+      "description": "Logs of API usage per user"
     }
   }
 }

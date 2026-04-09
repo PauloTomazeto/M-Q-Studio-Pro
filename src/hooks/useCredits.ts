@@ -2,10 +2,13 @@ import { useState, useEffect } from 'react';
 import { db, auth, handleFirestoreError, OperationType } from '../firebase';
 import { doc, onSnapshot, updateDoc, increment, setDoc, getDoc } from 'firebase/firestore';
 
+import { useStudioStore } from '../store/studioStore';
+
 export const useCredits = () => {
   const [credits, setCredits] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [userProfile, setUserProfile] = useState<any>(null);
+  const { setUserCredits, setUserPlan } = useStudioStore();
 
   useEffect(() => {
     if (!auth.currentUser) return;
@@ -27,8 +30,17 @@ export const useCredits = () => {
           }).catch(console.error);
         }
 
-        setCredits(isAdminEmail ? 999999 : data.credits);
+        const currentCredits = isAdminEmail ? 999999 : data.credits;
+        setCredits(currentCredits);
         setUserProfile(isAdminEmail ? { ...data, plan: 'premium', role: 'admin', credits: 999999 } : data);
+        
+        // Sync with Studio Store
+        setUserPlan(data.plan);
+        setUserCredits({ 
+          image: currentCredits, 
+          video: data.videoCredits || 0, 
+          proImage: data.proCredits || 0 
+        });
       } else {
         // Initialize user if not exists
         const initialData = {
@@ -48,11 +60,21 @@ export const useCredits = () => {
           lastModeSelectedAt: null,
           modeHistory: [],
         };
-        setDoc(userRef, initialData).catch(err => handleFirestoreError(err, OperationType.CREATE, 'users'));
+        setDoc(userRef, initialData).catch(err => {
+          try {
+            handleFirestoreError(err, OperationType.CREATE, 'users');
+          } catch (e) {
+            console.error(e);
+          }
+        });
       }
       setLoading(false);
     }, (error) => {
-      handleFirestoreError(error, OperationType.GET, 'users');
+      try {
+        handleFirestoreError(error, OperationType.GET, 'users');
+      } catch (e) {
+        console.error(e);
+      }
       setLoading(false);
     });
 

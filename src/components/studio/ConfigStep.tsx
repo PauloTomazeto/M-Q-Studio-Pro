@@ -5,9 +5,27 @@ import LightingParametersPanel from './LightingParametersPanel';
 import AtmosphereParametersPanel from './AtmosphereParametersPanel';
 import BloomParametersPanel from './BloomParametersPanel';
 import ColorGradingParametersPanel from './ColorGradingParametersPanel';
-import { ENVIRONMENT_LABELS, EnvironmentType, TopDownAngle } from '../../types/studio';
-import { Sun, Thermometer, Palette, Camera, Sparkles, Wand2, MapPin, Compass, Info, Lock } from 'lucide-react';
+import { ENVIRONMENT_LABELS, EnvironmentType, HUMANIZATION_STYLE_LABELS, HumanizationStyle, TopDownAngle } from '../../types/studio';
+import { Sun, Thermometer, Palette, Camera, Sparkles, Wand2, MapPin, Compass, Info, Lock, Layout, Smartphone, Home } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+
+const STYLE_OPTIONS = [
+  { id: 'contemp', label: 'Contemporâneo', description: 'Linhas limpas, vidro e materiais mistos' },
+  { id: 'minimalista', label: 'Minimalista', description: 'Volumes puros, sem ornamentos' },
+  { id: 'colonial', label: 'Colonial Brasileiro', description: 'Tradicional, madeira e telhas de barro' },
+  { id: 'industrial', label: 'Industrial', description: 'Tijolo, concreto e metal exposto' },
+  { id: 'brutalista', label: 'Brutalista', description: 'Concreto aparente e volumes monumentais' },
+];
+
+const CAMERA_OPTIONS = [
+  { id: 'canon_r5', label: 'Canon EOS R5', brand: 'Canon', lens: 'RF 35mm f/1.4L', type: 'Professional' },
+  { id: 'nikon_z9', label: 'Nikon Z9', brand: 'Nikon', lens: 'NIKKOR Z 35mm f/1.8 S', type: 'Professional' },
+  { id: 'sony_a7rv', label: 'Sony Alpha 7R V', brand: 'Sony', lens: 'FE 35mm f/1.4 GM', type: 'Professional' },
+  { id: 'panasonic_s1h', label: 'Panasonic Lumix S1H', brand: 'Panasonic', lens: 'Leica DG Summilux 35mm', type: 'Professional' },
+  { id: 'iphone_15_pro', label: 'iPhone 15 Pro Max', brand: 'Apple', lens: 'Main 24mm', type: 'Smartphone' },
+  { id: 'iphone_14_pro', label: 'iPhone 14 Pro', brand: 'Apple', lens: 'Main 24mm', type: 'Smartphone' },
+  { id: 'iphone_13_pro', label: 'iPhone 13 Pro', brand: 'Apple', lens: 'Main 26mm', type: 'Smartphone' },
+];
 
 const ConfigStep: React.FC = () => {
   const { 
@@ -180,10 +198,10 @@ const ConfigStep: React.FC = () => {
               <div className="space-y-4">
                 <label className="text-sm font-bold text-neutral-600 dark:text-neutral-400 flex items-center gap-2">
                   <Camera size={16} />
-                  Ângulo de Visão
+                  Ângulo de Visão (Drone)
                 </label>
                 <div className="grid grid-cols-2 gap-4">
-                  {[90, 45].map((angle) => (
+                  {[90, 80, 60, 45].map((angle) => (
                     <button
                       key={angle}
                       onClick={() => handleParamChange('topDownAngle', angle)}
@@ -195,42 +213,139 @@ const ConfigStep: React.FC = () => {
                     >
                       <p className="font-bold">{angle}°</p>
                       <p className="text-xs text-neutral-500 mt-1">
-                        {angle === 90 ? 'Perspectiva Superior (Top-down)' : 'Perspectiva Isométrica'}
+                        {angle === 90 ? 'Ortogonal (Top-down)' : 
+                         angle === 80 ? 'Drone Quase Vertical' :
+                         angle === 60 ? 'Perspectiva Elevada' : 'Aérea Lateral'}
                       </p>
                     </button>
                   ))}
                 </div>
               </div>
 
-              <div className="space-y-4">
-                <label className="text-sm font-bold text-neutral-600 dark:text-neutral-400 flex items-center gap-2">
-                  <MapPin size={16} />
-                  Tipo de Ambiente Externo
-                </label>
-                <div className="grid grid-cols-1 gap-3">
-                  {(Object.keys(ENVIRONMENT_LABELS) as EnvironmentType[]).map((env) => (
-                    <button
-                      key={env}
-                      onClick={() => handleParamChange('environmentType', env)}
-                      className={`p-3 px-4 rounded-xl border-2 transition-all text-left flex items-center justify-between ${
-                        configParams.environmentType === env
-                          ? "border-primary bg-primary/5"
-                          : "border-neutral-100 dark:border-neutral-800 hover:border-neutral-200 dark:hover:border-neutral-700"
-                      }`}
-                    >
-                      <span className={configParams.environmentType === env ? "font-bold text-primary" : "font-medium"}>
-                        {ENVIRONMENT_LABELS[env]}
-                      </span>
-                      {configParams.environmentType === env && (
-                        <div className="w-2 h-2 rounded-full bg-primary" />
-                      )}
-                    </button>
-                  ))}
+              <div className="space-y-6">
+                <div className="space-y-4">
+                  <label className="text-sm font-bold text-neutral-600 dark:text-neutral-400 flex items-center gap-2">
+                    <Layout size={16} />
+                    Estilo de Humanização
+                  </label>
+                  <div className="grid grid-cols-1 gap-3">
+                    {(Object.keys(HUMANIZATION_STYLE_LABELS) as HumanizationStyle[]).map((style) => (
+                      <button
+                        key={style}
+                        onClick={() => handleParamChange('humanizationStyle', style)}
+                        className={`p-3 px-4 rounded-xl border-2 transition-all text-left flex items-center justify-between ${
+                          configParams.humanizationStyle === style
+                            ? "border-primary bg-primary/5"
+                            : "border-neutral-100 dark:border-neutral-800 hover:border-neutral-200 dark:hover:border-neutral-700"
+                        }`}
+                      >
+                        <span className={configParams.humanizationStyle === style ? "font-bold text-primary" : "font-medium"}>
+                          {HUMANIZATION_STYLE_LABELS[style]}
+                        </span>
+                        {configParams.humanizationStyle === style && (
+                          <div className="w-2 h-2 rounded-full bg-primary" />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <label className="text-sm font-bold text-neutral-600 dark:text-neutral-400 flex items-center gap-2">
+                    <MapPin size={16} />
+                    Tipo de Ambiente Externo
+                  </label>
+                  <div className="grid grid-cols-1 gap-3">
+                    {(Object.keys(ENVIRONMENT_LABELS) as EnvironmentType[]).map((env) => (
+                      <button
+                        key={env}
+                        onClick={() => handleParamChange('environmentType', env)}
+                        className={`p-3 px-4 rounded-xl border-2 transition-all text-left flex items-center justify-between ${
+                          configParams.environmentType === env
+                            ? "border-primary bg-primary/5"
+                            : "border-neutral-100 dark:border-neutral-800 hover:border-neutral-200 dark:hover:border-neutral-700"
+                        }`}
+                      >
+                        <span className={configParams.environmentType === env ? "font-bold text-primary" : "font-medium"}>
+                          {ENVIRONMENT_LABELS[env]}
+                        </span>
+                        {configParams.environmentType === env && (
+                          <div className="w-2 h-2 rounded-full bg-primary" />
+                        )}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
           </div>
         )}
+
+        <div className="bg-white dark:bg-neutral-900 p-8 rounded-3xl border border-neutral-200 dark:border-neutral-800 shadow-sm space-y-6">
+          <div className="flex items-center gap-3 text-primary">
+            <Home size={24} />
+            <h3 className="text-xl font-bold">Estilo Arquitetônico</h3>
+          </div>
+          
+          <div className="grid grid-cols-1 gap-3">
+            {STYLE_OPTIONS.map((style) => (
+              <button
+                key={style.id}
+                onClick={() => handleParamChange('styleCode', style.id)}
+                className={`p-4 rounded-2xl border-2 transition-all text-left flex items-center justify-between ${
+                  configParams.styleCode === style.id
+                    ? "border-primary bg-primary/5 ring-4 ring-primary/10"
+                    : "border-neutral-100 dark:border-neutral-800 hover:border-neutral-200 dark:hover:border-neutral-700"
+                }`}
+              >
+                <div>
+                  <p className="font-bold">{style.label}</p>
+                  <p className="text-xs text-neutral-500 mt-0.5">{style.description}</p>
+                </div>
+                {configParams.styleCode === style.id && (
+                  <div className="w-2 h-2 rounded-full bg-primary" />
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="bg-white dark:bg-neutral-900 p-8 rounded-3xl border border-neutral-200 dark:border-neutral-800 shadow-sm space-y-6">
+          <div className="flex items-center gap-3 text-primary">
+            <Camera size={24} />
+            <h3 className="text-xl font-bold">Seleção de Câmera</h3>
+          </div>
+          
+          <div className="grid grid-cols-1 gap-3 max-h-[400px] overflow-y-auto pr-2 scrollbar-hide">
+            {CAMERA_OPTIONS.map((cam) => (
+              <button
+                key={cam.id}
+                onClick={() => handleParamChange('cameraSelection', cam.id)}
+                className={`p-4 rounded-2xl border-2 transition-all text-left flex items-center gap-4 ${
+                  configParams.cameraSelection === cam.id
+                    ? "border-primary bg-primary/5 ring-4 ring-primary/10"
+                    : "border-neutral-100 dark:border-neutral-800 hover:border-neutral-200 dark:hover:border-neutral-700"
+                }`}
+              >
+                <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
+                  cam.type === 'Smartphone' ? 'bg-blue-500/10 text-blue-500' : 'bg-primary/10 text-primary'
+                }`}>
+                  {cam.type === 'Smartphone' ? <Smartphone size={20} /> : <Camera size={20} />}
+                </div>
+                <div className="flex-1">
+                  <div className="flex items-center justify-between">
+                    <p className="font-bold">{cam.label}</p>
+                    <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest">{cam.brand}</span>
+                  </div>
+                  <p className="text-xs text-neutral-500 mt-0.5">{cam.lens}</p>
+                </div>
+                {configParams.cameraSelection === cam.id && (
+                  <div className="w-2 h-2 rounded-full bg-primary" />
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
 
         <div className="bg-white dark:bg-neutral-900 p-8 rounded-3xl border border-neutral-200 dark:border-neutral-800 shadow-sm space-y-6">
           <div className="flex items-center justify-between">

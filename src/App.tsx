@@ -9,20 +9,95 @@ import Studio from './pages/Studio';
 import Dashboard from './pages/Dashboard';
 import Projects from './pages/Projects';
 import Settings from './pages/Settings';
+import ImageGeneration from './pages/ImageGeneration';
+import LandingPage from './pages/LandingPage';
+import PricingPage from './pages/PricingPage';
+import AdminPage from './pages/AdminPage';
 import { motion, AnimatePresence } from 'framer-motion';
 import { LogIn, Layout as LayoutIcon } from 'lucide-react';
+import { doc, getDoc, setDoc, serverTimestamp, collection, query, where, getDocs, deleteDoc } from 'firebase/firestore';
+import { db, isAdminEmail } from './firebase';
 
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const { setUserPlan, setUserCredits } = useStudioStore();
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setUser(user);
-      setLoading(false);
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      try {
+        if (user) {
+          // Sync user profile with Firestore
+          let userRef = doc(db, 'users', user.uid);
+          let userSnap = await getDoc(userRef);
+          let userData: any = null;
+          
+          if (!userSnap.exists()) {
+            // Check if user was pre-registered by admin using email
+            const usersRef = collection(db, 'users');
+            const q = query(usersRef, where('email', '==', user.email));
+            const querySnap = await getDocs(q);
+            
+            if (!querySnap.empty) {
+              // User exists but with a different ID (probably created by admin)
+              const existingDoc = querySnap.docs[0];
+              const existingData = existingDoc.data();
+              
+              // Migrate data to the new UID-based document
+              userData = {
+                ...existingData,
+                uid: user.uid,
+                photoURL: user.photoURL || existingData.photoURL,
+                displayName: user.displayName || existingData.displayName,
+                updatedAt: new Date().toISOString()
+              };
+              
+              await setDoc(userRef, userData);
+              
+              // Delete the old document created by admin to avoid duplicates
+              if (existingDoc.id !== user.uid) {
+                try {
+                  await deleteDoc(existingDoc.ref);
+                } catch (e) {
+                  console.error("Error cleaning up old user doc:", e);
+                }
+              }
+            } else {
+              // Truly new user
+              const isAdmin = isAdminEmail(user.email);
+              userData = {
+                uid: user.uid,
+                email: user.email,
+                displayName: user.displayName,
+                photoURL: user.photoURL,
+                role: isAdmin ? 'admin' : 'user',
+                plan: isAdmin ? 'premium' : 'basic',
+                credits: isAdmin ? 3000 : 10,
+                subscriptionStatus: isAdmin ? 'active' : 'inactive',
+                createdAt: new Date().toISOString(),
+              };
+              await setDoc(userRef, userData);
+            }
+            
+            if (userData) {
+              setUserPlan(userData.plan as any);
+              setUserCredits({ image: userData.credits, video: 0, proImage: 0 });
+            }
+          } else {
+            const data = userSnap.data();
+            setUserPlan(data.plan);
+            setUserCredits({ image: data.credits, video: 0, proImage: 0 });
+          }
+        }
+      } catch (error) {
+        console.error("Auth sync error:", error);
+      } finally {
+        setUser(user);
+        setLoading(false);
+      }
     });
     return () => unsubscribe();
-  }, []);
+  }, [setUserPlan, setUserCredits]);
 
   if (loading) {
     return (
@@ -37,12 +112,12 @@ const App: React.FC = () => {
   }
 
   if (!user) {
-    return <LoginScreen />;
+    return <LandingPage />;
   }
 
   return (
     <Router>
-      <div className="flex h-screen bg-neutral-50 dark:bg-neutral-950 text-neutral-900 dark:text-neutral-50 overflow-hidden">
+      <div className="flex h-screen bg-[#f2f2f2] text-neutral-900 overflow-hidden">
         <Sidebar />
         <div className="flex-1 flex flex-col overflow-hidden">
           <Navbar />
@@ -51,8 +126,11 @@ const App: React.FC = () => {
               <Routes>
                 <Route path="/" element={<Dashboard />} />
                 <Route path="/studio" element={<Studio />} />
+                <Route path="/image-generation" element={<ImageGeneration />} />
                 <Route path="/projects" element={<Projects />} />
                 <Route path="/settings" element={<Settings />} />
+                <Route path="/pricing" element={<PricingPage />} />
+                <Route path="/admin" element={<AdminPage />} />
                 <Route path="*" element={<Navigate to="/" />} />
               </Routes>
             </AnimatePresence>
@@ -60,42 +138,6 @@ const App: React.FC = () => {
         </div>
       </div>
     </Router>
-  );
-};
-
-const LoginScreen = () => {
-  const handleLogin = () => {
-    signInWithPopup(auth, googleProvider);
-  };
-
-  return (
-    <div className="flex items-center justify-center h-screen bg-neutral-50 dark:bg-neutral-950">
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="max-w-md w-full p-8 bg-white dark:bg-neutral-900 rounded-2xl shadow-xl border border-neutral-200 dark:border-neutral-800 text-center"
-      >
-        <div className="mb-8 flex justify-center">
-          <div className="w-16 h-16 bg-primary rounded-2xl flex items-center justify-center text-white shadow-lg shadow-primary/20">
-            <LayoutIcon size={32} />
-          </div>
-        </div>
-        <h1 className="text-3xl font-bold mb-2 font-sans tracking-tight">M&QSTUDIO</h1>
-        <p className="text-neutral-500 dark:text-neutral-400 mb-8">
-          Advanced architectural prompt generator for high-fidelity rendering.
-        </p>
-        <button
-          onClick={handleLogin}
-          className="w-full flex items-center justify-center gap-3 bg-primary hover:bg-primary-dark text-white font-semibold py-3 px-6 rounded-xl transition-all shadow-lg shadow-primary/20 active:scale-95"
-        >
-          <LogIn size={20} />
-          Continuar com Google
-        </button>
-        <p className="mt-6 text-xs text-neutral-400 dark:text-neutral-500">
-          Ao continuar, você concorda com nossos Termos de Serviço e Política de Privacidade.
-        </p>
-      </motion.div>
-    </div>
   );
 };
 

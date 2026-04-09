@@ -38,7 +38,7 @@ const ModeSelection: React.FC<ModeSelectionProps> = ({ onSelect }) => {
     if (promptCount > moveCount) {
       return `Com base no histórico, você usou Prompt ${promptCount}x nos últimos 7 dias`;
     } else if (moveCount > promptCount) {
-      return `Com base no histórico, você usou Move ${moveCount}x nos últimos 7 dias`;
+      return `Com base no histórico, você usou Mov ${moveCount}x nos últimos 7 dias`;
     }
     return null;
   };

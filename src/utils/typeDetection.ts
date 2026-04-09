@@ -41,7 +41,8 @@ export const getPresetsForType = (type: ImageType) => {
         directional: 30,
         promptMode: 'single',
         topDownAngle: 90,
-        environmentType: 'URBANO'
+        environmentType: 'URBANO',
+        humanizationStyle: 'CONTEMPORANEO'
       };
     case 'PERSPECTIVA':
       return {

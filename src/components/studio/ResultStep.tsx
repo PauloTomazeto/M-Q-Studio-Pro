@@ -1,9 +1,15 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useStudioStore } from '../../store/studioStore';
 import { kieService } from '../../services/kieService';
 import { useCredits } from '../../hooks/useCredits';
-import { Loader2, Copy, Check, Edit3, Wand2, ArrowRight, Star, RotateCcw } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { uploadTempImage, compressImage } from '../../services/storageService';
+import { auth, db, handleFirestoreError, OperationType } from '../../firebase';
+import { doc, updateDoc, onSnapshot } from 'firebase/firestore';
+import { 
+  Loader2, Copy, Check, Edit3, Wand2, ArrowRight, Star, RotateCcw,
+  Save, X
+} from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 import confetti from 'canvas-confetti';
 
 const ResultStep: React.FC = () => {
@@ -22,9 +28,15 @@ const ResultStep: React.FC = () => {
     setQualityBreakdown,
     setPromptId,
     setIsModeLocked,
-    setStep 
+    setStep,
+    base64Image,
+    sessionId,
+    projectId,
+    setProjectId,
+    mirrorImage,
+    setMirrorImage
   } = useStudioStore();
-  const { consumeCredits } = useCredits();
+  const { consumeCredits, refundCredits } = useCredits();
   const [status, setStatus] = useState<'loading' | 'success' | 'error'>(
     (configParams.promptMode === 'single' ? generatedPrompt : (generatedBlocks && generatedBlocks.length > 0)) ? 'success' : 'loading'
   );
@@ -37,6 +49,127 @@ const ResultStep: React.FC = () => {
   const [editedText, setEditedText] = useState('');
   const [isFavorite, setIsFavorite] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
+  const [projectName, setProjectName] = useState('');
+  const [isSavingProject, setIsSavingProject] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+
+  const getActivePrompt = () => {
+    if (configParams.promptMode === 'single') return prompt || generatedPrompt;
+    if (blocks && blocks.length > 0) {
+      return blocks.map(b => b.content).join('\n\n');
+    }
+    return null;
+  };
+
+  const hasMirror = scanResult?.materials?.some((m: any) => m.reflectancia === 'espelhado');
+
+  const handleSaveProject = async (nameOverride?: string) => {
+    const activePrompt = getActivePrompt();
+    if (!activePrompt) return;
+    
+    // If we have a projectId and no nameOverride, it's an update
+    if (projectId && !nameOverride) {
+      setIsSavingProject(true);
+      try {
+        const projectRef = doc(db, 'projects', projectId);
+        await updateDoc(projectRef, {
+          prompt: activePrompt,
+          originalImage: base64Image,
+          mirrorImage: mirrorImage,
+          scanResult,
+          configParams,
+          materials,
+          ambientLight,
+          lightPoints,
+          updatedAt: new Date().toISOString()
+        });
+        
+        setSaveSuccess(true);
+        setTimeout(() => setSaveSuccess(false), 3000);
+        
+        confetti({
+          particleCount: 30,
+          spread: 30,
+          origin: { y: 0.7 },
+          colors: ['#10B981', '#059669']
+        });
+      } catch (err) {
+        console.error('Failed to update project:', err);
+        handleFirestoreError(err, OperationType.WRITE, 'projects');
+      } finally {
+        setIsSavingProject(false);
+      }
+      return;
+    }
+
+    // If no projectId or we are in the modal (nameOverride provided)
+    const finalName = nameOverride || projectName;
+    if (!finalName.trim()) {
+      setIsSaveModalOpen(true);
+      return;
+    }
+    
+    setIsSavingProject(true);
+    try {
+      const { addDoc, collection } = await import('firebase/firestore');
+      const projectData = {
+        name: finalName,
+        prompt: activePrompt,
+        originalImage: base64Image,
+        mirrorImage: mirrorImage,
+        scanResult,
+        configParams,
+        materials,
+        ambientLight,
+        lightPoints,
+        userId: auth.currentUser?.uid,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        type: 'saved_project'
+      };
+      
+      const docRef = await addDoc(collection(db, 'projects'), projectData);
+      setProjectId(docRef.id);
+      
+      setSaveSuccess(true);
+      setTimeout(() => {
+        setIsSaveModalOpen(false);
+        setSaveSuccess(false);
+        setProjectName('');
+      }, 2000);
+      
+      confetti({
+        particleCount: 50,
+        spread: 40,
+        origin: { y: 0.7 },
+        colors: ['#10B981', '#059669']
+      });
+    } catch (err) {
+      console.error('Failed to save project:', err);
+      handleFirestoreError(err, OperationType.WRITE, 'projects');
+    } finally {
+      setIsSavingProject(false);
+    }
+  };
+
+  const handleDownload = async (url: string) => {
+    try {
+      const response = await fetch(url);
+      const blob = await response.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = `mqstudio_gen_${Date.now()}.jpg`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(blobUrl);
+    } catch (err) {
+      console.error('Failed to download image:', err);
+      window.open(url, '_blank');
+    }
+  };
 
   const generate = async () => {
     setStatus('loading');
@@ -240,17 +373,18 @@ const ResultStep: React.FC = () => {
             Regerar
           </button>
           <button
-            onClick={() => setStep('config')}
-            className="px-6 py-3 rounded-xl border border-neutral-200 dark:border-neutral-800 font-bold hover:bg-neutral-50 dark:hover:bg-neutral-800 transition-colors"
+            onClick={() => handleSaveProject()}
+            disabled={isSavingProject}
+            className="bg-primary hover:bg-primary-dark text-white font-bold py-3 px-8 rounded-xl transition-all shadow-lg shadow-primary/20 active:scale-95 flex items-center gap-2 disabled:opacity-50"
           >
-            Ajustar Config
-          </button>
-          <button
-            onClick={() => setStep('generate')}
-            className="bg-primary hover:bg-primary-dark text-white font-bold py-3 px-8 rounded-xl transition-all shadow-lg shadow-primary/20 active:scale-95 flex items-center gap-2"
-          >
-            Renderizar Imagem
-            <ArrowRight size={18} />
+            {isSavingProject ? (
+              <Loader2 size={18} className="animate-spin" />
+            ) : saveSuccess && !isSaveModalOpen ? (
+              <Check size={18} />
+            ) : (
+              <Save size={18} />
+            )}
+            {saveSuccess && !isSaveModalOpen ? 'Atualizado!' : projectId ? 'Salvar Alterações' : 'Salvar Projeto'}
           </button>
         </div>
       </div>
@@ -389,6 +523,85 @@ const ResultStep: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Save Project Modal */}
+      <AnimatePresence>
+        {isSaveModalOpen && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsSaveModalOpen(false)}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative bg-white dark:bg-neutral-900 rounded-3xl border border-neutral-200 dark:border-neutral-800 p-8 max-w-md w-full shadow-2xl space-y-6"
+            >
+              <div className="flex items-center justify-between">
+                <h3 className="text-xl font-bold">Salvar Projeto</h3>
+                <button 
+                  onClick={() => setIsSaveModalOpen(false)}
+                  className="p-2 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-lg transition-colors"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-bold text-neutral-500 uppercase tracking-wider">
+                    Nome do Projeto
+                  </label>
+                  <input
+                    autoFocus
+                    type="text"
+                    value={projectName}
+                    onChange={(e) => setProjectName(e.target.value)}
+                    placeholder="Ex: Sala de Estar Moderna"
+                    className="w-full px-4 py-3 bg-neutral-50 dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 rounded-xl focus:ring-2 focus:ring-primary/20 outline-none transition-all"
+                  />
+                </div>
+
+                <div className="p-4 bg-primary/5 rounded-2xl border border-primary/10 flex items-start gap-3">
+                  <div className="w-8 h-8 bg-primary/10 rounded-lg flex items-center justify-center text-primary shrink-0">
+                    <Save size={16} />
+                  </div>
+                  <p className="text-xs text-neutral-600 dark:text-neutral-400 leading-relaxed">
+                    Seu projeto será salvo com todas as configurações de materiais, iluminação e o prompt gerado.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setIsSaveModalOpen(false)}
+                  className="flex-1 py-3 bg-neutral-100 dark:bg-neutral-800 font-bold rounded-xl hover:bg-neutral-200 transition-all"
+                >
+                  Cancelar
+                </button>
+                <button
+                  disabled={!projectName.trim() || isSavingProject}
+                  onClick={() => handleSaveProject(projectName)}
+                  className="flex-1 py-3 bg-primary text-white font-bold rounded-xl hover:bg-primary-dark transition-all shadow-lg shadow-primary/20 disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {isSavingProject ? (
+                    <Loader2 size={18} className="animate-spin" />
+                  ) : saveSuccess ? (
+                    <Check size={18} />
+                  ) : (
+                    <Save size={18} />
+                  )}
+                  {saveSuccess ? 'Salvo!' : isSavingProject ? 'Salvando...' : 'Confirmar'}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

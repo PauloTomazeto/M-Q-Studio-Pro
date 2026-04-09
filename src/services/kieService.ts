@@ -1,48 +1,72 @@
 import axios from 'axios';
 import { z } from 'zod';
 import { db, auth } from '../firebase';
-import { doc, setDoc, updateDoc } from 'firebase/firestore';
+import { usageService } from './usageService';
+import { 
+  doc, 
+  setDoc, 
+  updateDoc, 
+  getDoc, 
+  runTransaction, 
+  collection, 
+  serverTimestamp,
+  increment
+} from 'firebase/firestore';
 import { uploadTempImage, deleteTempImage } from './storageService';
 
 // Zod Schema for ScanResult
 const PBRDiffuseSchema = z.object({
-  description: z.string(),
-  color_hex: z.string(),
-  color_rgb: z.object({ r: z.number(), g: z.number(), b: z.number() }),
-  saturation: z.number(),
-  brightness: z.number(),
-  texture_type: z.enum(['solid', 'pattern', 'natural', 'fabric_weave', 'rough']),
-  texture_scale: z.enum(['micro', 'fine', 'medium', 'coarse'])
+  description: z.string().optional(),
+  color_hex: z.string().optional(),
+  color_rgb: z.object({ r: z.number(), g: z.number(), b: z.number() }).optional(),
+  saturation: z.number().nullish(),
+  brightness: z.number().nullish(),
+  texture_type: z.string().optional(),
+  texture_scale: z.string().optional()
 });
 
 const PBRReflectionSchema = z.object({
-  intensity: z.number(),
-  fresnel_at_0: z.number(),
-  fresnel_at_90: z.number(),
-  is_metallic: z.boolean(),
+  intensity: z.number().nullish(),
+  fresnel_at_0: z.number().nullish(),
+  fresnel_at_90: z.number().nullish(),
+  is_metallic: z.boolean().nullish(),
   metallic_type: z.string().optional()
 });
 
 const PBRGlossinessSchema = z.object({
-  smoothness: z.number(),
-  roughness: z.number(),
-  micro_surface_variation: z.number(),
-  is_isotropic: z.boolean(),
+  smoothness: z.number().nullish(),
+  roughness: z.number().nullish(),
+  micro_surface_variation: z.number().nullish(),
+  is_isotropic: z.boolean().nullish(),
   anisotropy_direction: z.string().optional(),
   anisotropy_strength: z.number().optional()
 });
 
 const PBRBumpSchema = z.object({
-  description: z.string(),
-  bump_height: z.number(),
-  bump_frequency: z.enum(['fine', 'medium', 'coarse']),
-  bump_pattern: z.enum(['smooth', 'subtle', 'pronounced', 'extreme']),
+  description: z.string().optional(),
+  bump_height: z.number().nullish(),
+  bump_frequency: z.string().optional(),
+  bump_pattern: z.string().optional(),
   has_grooves: z.boolean().optional(),
   groove_direction: z.string().optional()
 });
 
+const PlantaTypeSchema = z.enum(['A', 'B', 'C', 'D']);
+
+const AmbienteSchema = z.object({
+  id: z.number(),
+  nome: z.string(),
+  area_m2: z.number().optional(),
+  tipo: z.enum(['interno', 'externo', 'semi-externo', 'circulacao', 'servico', 'molhado']),
+  posicao_no_lote: z.string().optional(),
+  adjacencias: z.array(z.string()).optional(),
+  aberturas: z.array(z.string()).optional(),
+  equipamentos_fixos: z.array(z.string()).optional(),
+  veiculos: z.array(z.string()).optional()
+});
+
 const PBRLightBehaviorSchema = z.object({
-  scattering_description: z.string(),
+  scattering_description: z.string().optional(),
   subsurface_scattering: z.boolean().optional(),
   sss_depth: z.number().optional(),
   ambient_occlusion_intensity: z.number().optional(),
@@ -52,55 +76,55 @@ const PBRLightBehaviorSchema = z.object({
 });
 
 const AmbientLightSchema = z.object({
-  period: z.enum(['golden_hour', 'morning', 'afternoon', 'late_afternoon', 'evening', 'night', 'blue_hour', 'overcast', 'indoor_artificial']),
-  temp_k: z.number().int().min(2700).max(8000),
-  azimuthal_direction: z.enum(['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']),
-  elevation_angle: z.number().min(0).max(90),
-  quality: z.enum(['hard', 'soft', 'diffuse', 'volumetric']),
-  dominant_source: z.enum(['natural', 'artificial', 'mixed']),
-  indirect_ratio: z.string(),
-  light_mixing_description: z.string(),
-  bloom_glare: z.boolean(),
-  bloom_intensity: z.number().min(0).max(100).optional(),
-  bloom_threshold: z.number().min(0).max(2).optional(),
-  bloom_color_tint: z.string().optional(),
-  has_shadow_direction: z.boolean(),
-  is_backlit: z.boolean().optional(),
-  is_rim_lit: z.boolean().optional(),
-  confidence: z.number().min(0).max(100),
-  confidence_factors: z.array(z.string()).optional()
+  period: z.string().nullish(),
+  temp_k: z.number().nullish(),
+  azimuthal_direction: z.string().nullish(),
+  elevation_angle: z.number().nullish(),
+  quality: z.string().nullish(),
+  dominant_source: z.string().nullish(),
+  indirect_ratio: z.string().nullish(),
+  light_mixing_description: z.string().nullish(),
+  bloom_glare: z.boolean().nullish(),
+  bloom_intensity: z.number().nullish(),
+  bloom_threshold: z.number().nullish(),
+  bloom_color_tint: z.string().nullish(),
+  has_shadow_direction: z.boolean().nullish(),
+  is_backlit: z.boolean().nullish(),
+  is_rim_lit: z.boolean().nullish(),
+  confidence: z.number().nullish(),
+  confidence_factors: z.array(z.string()).nullish()
 });
 
 const LightPointSchema = z.object({
   id: z.string(),
   location_description: z.string(),
-  type: z.enum(['rectangle', 'sphere', 'spot', 'ies', 'omni', 'dome', 'emissive', 'ambient']),
-  intensity_initial: z.number().min(0).max(100),
-  temp_k_initial: z.number().int().min(2700).max(8000),
-  color_hex: z.string(),
-  color_rgb: z.object({ r: z.number(), g: z.number(), b: z.number() }),
-  shape: z.enum(['rectangular', 'elliptical', 'spherical', 'conical', 'mesh']),
-  decay: z.enum(['inverse_square', 'linear', 'none']),
+  type: z.string().optional(),
+  intensity_initial: z.number().optional(),
+  temp_k_initial: z.number().optional(),
+  color_hex: z.string().optional(),
+  color_rgb: z.object({ r: z.number(), g: z.number(), b: z.number() }).optional(),
+  shape: z.string().optional(),
+  decay: z.string().optional(),
   cone_angle: z.number().optional(),
   penumbra_angle: z.number().optional(),
-  directionality: z.number().min(0).max(1),
-  shadow_softness: z.number().min(0).max(1),
-  ray_traced_shadows: z.boolean(),
-  affect_specular: z.boolean(),
-  affect_diffuse: z.boolean(),
-  affect_reflections: z.boolean(),
-  visible_in_render: z.boolean(),
-  spatial_x_pct: z.number().min(0).max(100),
-  spatial_y_pct: z.number().min(0).max(100),
-  spatial_z_depth: z.enum(['foreground', 'midground', 'background']).optional(),
-  bloom_glare: z.boolean(),
-  lens_distortion_contribution: z.number().min(0).max(1).optional(),
+  directionality: z.number().optional(),
+  shadow_softness: z.number().optional(),
+  ray_traced_shadows: z.boolean().optional(),
+  affect_specular: z.boolean().optional(),
+  affect_diffuse: z.boolean().optional(),
+  affect_reflections: z.boolean().optional(),
+  visible_in_render: z.boolean().optional(),
+  spatial_x_pct: z.number().optional(),
+  spatial_y_pct: z.number().optional(),
+  spatial_z_depth: z.string().optional(),
+  bloom_glare: z.boolean().optional(),
+  lens_distortion_contribution: z.number().optional(),
   artifacts_visible: z.boolean().optional(),
-  confidence: z.number().min(0).max(100),
+  confidence: z.number().optional(),
   confidence_factors: z.array(z.string()).optional(),
   is_speculative: z.boolean().optional(),
-  visual_impact: z.enum(['high', 'medium', 'low']),
-  serves_as: z.enum(['key_light', 'fill_light', 'back_light', 'rim_light', 'accent', 'ambient'])
+  visual_impact: z.string().optional(),
+  serves_as: z.string().optional()
 });
 
 const MaterialSchema = z.object({
@@ -109,88 +133,137 @@ const MaterialSchema = z.object({
   location_description: z.string().optional(),
   location_reference: z.string().optional(),
   acabamento: z.string(),
-  reflectancia: z.enum(['matte', 'semi-matte', 'semi-gloss', 'gloss', 'espelhado']),
-  pbr_diffuse: PBRDiffuseSchema,
-  pbr_reflection: PBRReflectionSchema,
-  pbr_glossiness: PBRGlossinessSchema,
-  pbr_bump: PBRBumpSchema,
-  pbr_light_behavior: PBRLightBehaviorSchema,
+  reflectancia: z.string().optional(),
+  pbr_diffuse: PBRDiffuseSchema.optional(),
+  pbr_reflection: PBRReflectionSchema.optional(),
+  pbr_glossiness: PBRGlossinessSchema.optional(),
+  pbr_bump: PBRBumpSchema.optional(),
+  pbr_light_behavior: PBRLightBehaviorSchema.optional(),
   adjacent_materials: z.array(z.string()).optional(),
   interaction_with_light: z.string().optional(),
-  confidence: z.number(),
+  confidence: z.number().optional(),
   confidence_factors: z.array(z.string()).optional(),
-  visibility: z.number(),
+  visibility: z.number().optional(),
   is_dominant: z.boolean().optional(),
-  material_category: z.enum([
-    'paint_coating', 'wood', 'stone', 'ceramic_tile', 'glass', 
-    'metal', 'concrete', 'textile', 'plastic_composite', 
-    'leather', 'paper_wallpaper', 'custom'
-  ])
+  material_category: z.string().optional()
+});
+
+const VolumeSchema = z.object({
+  id: z.string(),
+  dominant: z.boolean(),
+  forma_geometrica: z.string(),
+  posicao_relativa: z.string(),
+  proporcao_H_x_L: z.string(),
+  relacao_com_volume_anterior: z.string().nullish()
+});
+
+const OpeningSchema = z.object({
+  id: z.string(),
+  quantidade_e_ritmo: z.string(),
+  tipo_abertura: z.string(),
+  proporcao_H_L: z.string(),
+  material_perfil: z.string(),
+  tipo_vidro: z.string(),
+  posicao_na_fachada: z.string()
+});
+
+const StructuralHighlightSchema = z.object({
+  id: z.string(),
+  tipo: z.string().optional(),
+  material: z.string().optional(),
+  dimensao: z.string().optional(),
+  acabamento: z.string().optional(),
+  detalhes_especificos: z.string().optional()
 });
 
 export const ScanResultSchema = z.object({
   isFloorPlan: z.boolean(),
   typology: z.enum(['PLANTA_BAIXA', 'PERSPECTIVA', 'FACHADA', 'CORTE', 'ELEVAÇÃO', 'DETALHE', '3D_MOCK']),
+  plantaType: PlantaTypeSchema.optional(),
+  ambientes: z.array(AmbienteSchema).optional(),
+  orientation: z.object({
+    norte: z.boolean().optional(),
+    escala: z.string().optional(),
+    dimensoes_referencia: z.string().optional(),
+    proporcao_lote: z.string().optional()
+  }).optional(),
   floors: z.number().int().optional(),
-  volumes: z.string().optional(),
+  volumes: z.array(VolumeSchema).optional(),
   materials: z.array(MaterialSchema),
+  style_code: z.enum(['contemp', 'minimalista', 'colonial', 'industrial', 'brutalista', 'misto']).optional(),
+  context_20m: z.object({
+    topografia: z.string(),
+    vegetation_pct: z.number(),
+    species_visiveis: z.array(z.string()),
+    piso_externo: z.string(),
+    veiculos: z.boolean(),
+    infraestrutura_urbana: z.array(z.string()),
+    vizinhos: z.string()
+  }).optional(),
+  openings: z.array(OpeningSchema).optional(),
+  structural_highlights: z.array(StructuralHighlightSchema).optional(),
   cameraData: z.object({
-    height_m: z.number(),
-    distance_m: z.number(),
-    focal_apparent: z.number(),
+    height_m: z.number().optional(),
+    distance_m: z.number().optional(),
+    focal_apparent: z.number().optional(),
     focal_actual: z.number().optional(),
-    fov_horizontal: z.number(),
-    fov_vertical: z.number(),
-    depth_of_field: z.number(),
+    fov_horizontal: z.number().optional(),
+    fov_vertical: z.number().optional(),
+    depth_of_field: z.number().optional(),
     lens_distortion: z.object({
-      type: z.enum(['rectilinear', 'fisheye', 'panoramic']),
-      coefficient: z.number()
-    }),
-    pitch: z.number(),
-    yaw: z.number(),
-    roll: z.number(),
-    aspect_ratio: z.string(),
-    image_width_px: z.number(),
-    image_height_px: z.number(),
+      type: z.string().optional(),
+      coefficient: z.number().optional()
+    }).optional(),
+    pitch: z.number().optional(),
+    yaw: z.number().optional(),
+    roll: z.number().optional(),
+    aspect_ratio: z.string().optional(),
+    image_width_px: z.number().optional(),
+    image_height_px: z.number().optional(),
     image_type_influence: z.object({
-      floor_plan_compatible: z.boolean(),
-      perspective_type: z.enum(['isometric', 'dimetric', 'linear', 'aerial', 'worm', 'bird', 'frontal']),
-      viewing_angle: z.string()
-    }),
-    vanishing_points: z.number(),
+      floor_plan_compatible: z.boolean().optional(),
+      perspective_type: z.string().optional(),
+      viewing_angle: z.string().optional()
+    }).optional(),
+    vanishing_points: z.number().optional(),
     perspective_lines: z.object({
-      primary: z.array(z.number()),
-      secondary: z.array(z.number())
+      primary: z.array(z.number()).optional(),
+      secondary: z.array(z.number()).optional()
     }).optional(),
     rendering_impact: z.object({
-      render_distance_optimal: z.number(),
-      fov_for_composition: z.number(),
-      depth_field_strength: z.number(),
-      lens_quality: z.enum(['sharp', 'soft', 'cinematic'])
-    }),
+      render_distance_optimal: z.number().optional(),
+      fov_for_composition: z.number().optional(),
+      depth_field_strength: z.number().optional(),
+      lens_quality: z.string().optional()
+    }).optional(),
     confidence: z.object({
-      height: z.number(),
-      distance: z.number(),
-      focal: z.number(),
-      perspective: z.number(),
-      general: z.number()
-    }),
-    detected_at: z.string(),
-    camera_preset: z.string(),
-    editable: z.boolean()
-  }),
+      height: z.number().optional(),
+      distance: z.number().optional(),
+      focal: z.number().optional(),
+      perspective: z.number().optional(),
+      general: z.number().optional()
+    }).optional(),
+    detected_at: z.string().optional(),
+    camera_preset: z.string().optional(),
+    editable: z.boolean().optional()
+  }).optional(),
   light: AmbientLightSchema,
   lightPoints: z.array(LightPointSchema),
+  structural_integrity: z.object({
+    junction_analysis: z.string().optional(),
+    boundary_preservation: z.string().optional(),
+    artifact_prevention_notes: z.string().optional()
+  }).optional(),
   confidence: z.object({
-    materials: z.number().min(0).max(100),
-    camera: z.number().min(0).max(100),
-    light: z.number().min(0).max(100),
-    context: z.number().min(0).max(100),
-    general: z.number().min(0).max(100),
-    composition: z.number().min(0).max(100),
-    lighting_quality: z.number().min(0).max(100),
-    photorealism: z.number().min(0).max(100),
-    technical_accuracy: z.number().min(0).max(100)
+    materials: z.number().optional(),
+    camera: z.number().optional(),
+    light: z.number().optional(),
+    context: z.number().optional(),
+    general: z.number().optional(),
+    composition: z.number().optional(),
+    lighting_quality: z.number().optional(),
+    photorealism: z.number().optional(),
+    technical_accuracy: z.number().optional()
   })
 });
 
@@ -218,10 +291,75 @@ Generate a complete ScanResult JSON object with 100% technical accuracy across 8
   * DETALHE: Close-up, materials, textures, connections.
   * 3D_MOCK: Isometric/3D mockup, technical 3D.
 - Detect if it's a floor plan (isFloorPlan).
-- Estimate floors and describe geometric volumes.
+- Estimate floors.
+
+[TOOL-VOLUMES: VOLUME ANALYSIS]
+- Identify geometric volumes (VolumeSchema):
+  * dominant: true for the main volume (anchor primário).
+  * forma_geometrica: horizontal rectangular volume, vertical rectangular mass, setback volume, cantilevered volume, projected mass, L-shaped plan, asymmetric massing, horizontal datum plane, pitched roof, mono-pitch roof, butterfly roof.
+  * posicao_relativa: frontal-esquerdo, frontal-direito, lateral, posterior.
+  * proporcao_H_x_L: Estimate height vs width ratio.
+  * relacao_com_volume_anterior: flush with, setback [N]m from, projected [N]m beyond, overlapping, separated by expansion joint from.
+
+[TOOL-OPENINGS: OPENINGS & FRAMES]
+- Identify openings (OpeningSchema):
+  * quantidade_e_ritmo: e.g., "3-module", "continuous band", "rhythmic vertical slits".
+  * tipo_abertura: horizontal band window, rectangular window opening, full-height glazing, structural glazing system, pivot entry door, sliding door system, double-leaf door, horizontal brise-soleil, vertical louver system, perforated screen (muxarabi), roller shutter.
+  * proporcao_H_L: Aspect ratio of the opening.
+  * material_perfil: aluminum [color] profile, steel frame, wood, frameless.
+  * tipo_vidro: laminated float, toughened, low-iron, reflective, tinted.
+  * posicao_na_fachada: flush, recessed [N]cm, projected [N]cm.
+
+[TOOL-STYLE: ARCHITECTURAL STYLE]
+- Identify the dominant style (style_code):
+  * contemp: Clean lines, large glass, mixed materials (wood/concrete/steel).
+  * minimalista: Pure volumes, white/neutral, zero ornament, hidden details.
+  * colonial: Traditional Brazilian colonial, clay tiles, wood frames, thick walls.
+  * industrial: Exposed brick/concrete/pipes, steel structures, dark tones.
+  * brutalista: Raw in-situ concrete, monumental volumes, expressive structure.
+  * misto: Combination of two styles.
+
+[TOOL-CONTEXT: EXTERIOR CONTEXT (20M)]
+- Analyze the immediate surroundings (context_20m):
+  * topografia: flat, sloped, terraced.
+  * vegetation_pct: Percentage of green coverage (0-100).
+  * species_visiveis: List specific plants (e.g., "Ipê Amarelo", "Palmeira Imperial").
+  * piso_externo: sidewalk material, driveway finish.
+  * veiculos: Are there cars/bikes visible?
+  * infraestrutura_urbana: utility poles, street lights, signage, curbs.
+  * vizinhos: Describe adjacent buildings or empty lots.
+
+[TOOL-STRUCTURAL: STRUCTURAL HIGHLIGHTS]
+- Identify structural elements (StructuralHighlightSchema):
+  * tipo: marquise (canopy), beiral (eave), pilar (exposed column), escada (external staircase), muro (perimeter wall).
+  * material: concrete, wood, metal, stone.
+  * dimensao: span (vão), projection (projeção), section size (seção), height (altura).
+  * acabamento: polished, raw, board-formed, flamed, etc.
 
 [TOOL-PLANTA: FLOOR PLAN ANALYSIS]
-- If isFloorPlan is true: Prioritize analysis of wall thickness, openings (doors/windows), and spatial distribution.
+- If isFloorPlan is true:
+  * Identify identifiers: wall thickness, dimension lines, room labels, door/window symbols, stairs, sanitary equipment, VEHICLES (cars, motorcycles, bicycles).
+  * Classify PlantaType:
+    - Type A: Single floor (house or apartment).
+    - Type B: Rooftop / External area (pool, gourmet, deck).
+    - Type C: Mixed (internal + external).
+    - Type D: Site plan (building on lot with garden).
+  * Inventory Environments (AmbienteSchema):
+    - Categorize: MOLHADO (Pool, Bathroom, Laundry), ÁREA EXTERNA SOCIAL (Gourmet, Deck, Garden), ÁREA EXTERNA LAZER (Pool, Spa, Fire pit), SERVIÇO (Garage, Storage), SOCIAL INTERNO (Living, Dining), ÍNTIMO (Bedroom, Suite, Office).
+    - Detect VEHICLES: If it's a garage (GARAGEM), identify the EXACT number and type of vehicles (e.g., "2 carros brancos", "1 SUV prata").
+  * Identify Orientation and Scale: North indicator, numeric scale, reference dimensions, lot proportions.
+
+[TOOL-FIDELITY: STRUCTURAL INTEGRITY]
+- Focus on junctions, corners, and boundaries:
+  * Identify if a material (e.g., wood paneling) extends exactly to the corner edge or if there is a structural transition (e.g., concrete pillar).
+  * Detect any "borders", "beams" (vigas), or "moldings" and their exact material and thickness.
+  * Identify the exact shape, color, and finish of lighting fixtures (e.g., "cylindrical matte black pendants", "spherical glass globes").
+  * Look for "steps" (degraus), level changes, or platform offsets and report them ONLY if they are explicitly present in the image.
+  * Analyze the junction between ceiling and walls: is it a clean 90-degree joint, a recessed shadow gap, or a visible beam?
+  * Populate structural_integrity:
+    - junction_analysis: Describe how planes meet (e.g., "Clean wood-to-ceiling 90-degree junction").
+    - boundary_preservation: Describe material limits (e.g., "Wood paneling extends to the far right corner edge without interruption").
+    - artifact_prevention_notes: Specific warnings for the prompt generator (e.g., "Do not add concrete pillars at the wood wall corner").
 
 [TOOL-MAT: MATERIAL ANALYSIS (PBR)]
 - For each element (wall, floor, ceiling, furniture, etc.), identify:
@@ -278,38 +416,52 @@ ${JSON.stringify(ScanResultSchema.shape, null, 2)}`;
 const parseJsonResponse = (content: string) => {
   if (typeof content !== 'string') return content;
   
-  try {
-    return JSON.parse(content);
-  } catch (e) {
-    const match = content.match(/```json\n([\s\S]*?)\n```/) || content.match(/```([\s\S]*?)```/);
-    if (match) {
-      try {
-        return JSON.parse(match[1].trim());
-      } catch (e2) {
-        console.error("Failed to parse extracted JSON:", e2);
-      }
-    }
-    
-    const firstBrace = content.indexOf('{');
-    const lastBrace = content.lastIndexOf('}');
-    if (firstBrace !== -1 && lastBrace !== -1) {
-      try {
-        return JSON.parse(content.substring(firstBrace, lastBrace + 1));
-      } catch (e3) {
-        console.error("Failed to parse substring JSON:", e3);
-      }
-    }
-    
-    throw new Error("Invalid JSON response from AI: " + content);
+  // Basic cleanup for common AI JSON errors
+  let cleanContent = content.trim();
+  
+  // Remove markdown wrappers if present
+  const markdownMatch = cleanContent.match(/```json\n([\s\S]*?)\n```/) || cleanContent.match(/```([\s\S]*?)```/);
+  if (markdownMatch) {
+    cleanContent = markdownMatch[1].trim();
   }
+
+  // If it's HTML, it's definitely not JSON
+  if (cleanContent.startsWith('<!doctype html>') || cleanContent.startsWith('<html')) {
+    throw new Error("AI returned HTML instead of JSON. This usually happens during server restarts or API errors.");
+  }
+
+  const tryParse = (str: string) => {
+    try {
+      // Remove trailing commas before parsing
+      const sanitized = str.replace(/,\s*([\]}])/g, '$1');
+      return JSON.parse(sanitized);
+    } catch (e) {
+      return null;
+    }
+  };
+
+  // Try direct parse
+  const direct = tryParse(cleanContent);
+  if (direct) return direct;
+
+  // Try finding the first { and last }
+  const firstBrace = cleanContent.indexOf('{');
+  const lastBrace = cleanContent.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace !== -1) {
+    const substring = cleanContent.substring(firstBrace, lastBrace + 1);
+    const subParse = tryParse(substring);
+    if (subParse) return subParse;
+  }
+  
+  throw new Error("Invalid JSON response from AI: " + content.substring(0, 500) + (content.length > 500 ? '...' : ''));
 };
 
 const extractContent = (data: any): string => {
   if (!data) return '';
   
   // Handle KIE specific error format (e.g. 500 maintenance)
-  if (data.code && data.code !== 200 && data.code !== 0) {
-    const errorMsg = data.msg || data.message || 'Unknown KIE API Error';
+  if (data.error || (data.code && data.code !== 200 && data.code !== 0)) {
+    const errorMsg = data.message || data.msg || data.error || 'Unknown KIE API Error';
     console.error('KIE API Error Response:', data);
     throw new Error(`KIE_API_ERROR: ${errorMsg}`);
   }
@@ -343,49 +495,46 @@ const extractContent = (data: any): string => {
 
 export const kieService = {
   async diagnoseImage(imageBase64: string, sessionId: string): Promise<ScanResult> {
+    await usageService.logUsage('scan', { metadata: { sessionId } });
     const userId = auth.currentUser?.uid;
     if (!userId) throw new Error('AUTH_REQUIRED');
 
     console.log('Starting diagnosis for session:', sessionId);
     const startTime = Date.now();
     
-    // Ensure imageBase64 is a proper data URL
-    let formattedImage = imageBase64;
-    if (!formattedImage.startsWith('data:')) {
-      formattedImage = `data:image/jpeg;base64,${formattedImage}`;
+    // Extract raw base64 data
+    let base64Data = imageBase64;
+    let mimeType = 'image/jpeg';
+    if (base64Data.startsWith('data:')) {
+      const parts = base64Data.split(',');
+      mimeType = parts[0].match(/:(.*?);/)?.[1] || 'image/jpeg';
+      base64Data = parts[1];
     }
-
-    console.log('Image data format check:', {
-      length: formattedImage.length,
-      prefix: formattedImage.substring(0, 50),
-      isDataUrl: formattedImage.startsWith('data:'),
-      isBlob: formattedImage.startsWith('blob:')
-    });
 
     try {
       console.log('Calling KIE Gemini API for diagnosis...');
-      const response = await axios.post('/api/kie/gemini', {
-        model: 'gemini-3.1-pro',
+      const response = await axios.post('/api/kie/gemini-2.5-pro/v1/chat/completions', {
+        model: 'gemini-2.5-pro',
         messages: [
-          {
-            role: 'user',
+          { role: 'system', content: SYSTEM_INSTRUCTION },
+          { 
+            role: 'user', 
             content: [
-              { type: 'text', text: SYSTEM_INSTRUCTION },
               { type: 'text', text: 'Perform a full architectural diagnosis of this image. Return ONLY the JSON object.' },
-              { type: 'image_url', image_url: { url: formattedImage } }
+              { 
+                type: 'image_url', 
+                image_url: { url: imageBase64 } 
+              }
             ]
           }
         ],
-        max_tokens: 8192,
         temperature: 0.7,
-        stream: false
-      }, { timeout: 120000 });
+        response_format: { type: 'json_object' }
+      });
 
-      console.log('KIE Gemini API responded successfully. Status:', response.status);
-      
       const content = extractContent(response.data);
       if (!content) {
-        console.error('Failed to extract content from AI response. Full data:', response.data);
+        console.error('Failed to extract content from AI response.');
         throw new Error('AI_RESPONSE_EMPTY');
       }
 
@@ -434,41 +583,45 @@ export const kieService = {
   },
 
   async detectArchitecture(imageBase64: string) {
-    // Ensure imageBase64 is a proper data URL
-    let formattedImage = imageBase64;
-    if (!formattedImage.startsWith('data:')) {
-      formattedImage = `data:image/jpeg;base64,${formattedImage}`;
-    }
-
-    const response = await axios.post('/api/kie/gemini', {
-      model: 'gemini-3.1-pro',
+    await usageService.logUsage('read');
+    
+    const response = await axios.post('/api/kie/gemini-2.5-pro/v1/chat/completions', {
+      model: 'gemini-2.5-pro',
       messages: [
-        {
-          role: 'user',
+        { 
+          role: 'user', 
           content: [
-            { type: 'text', text: 'You are an architectural expert. Your task is to determine if an image represents an architectural subject (building, interior, floor plan, facade, etc.). Respond ONLY with a JSON object: {"isArchitecture": boolean, "confidence": number, "reason": string}' },
-            {
-              type: 'image_url',
-              image_url: {
-                url: formattedImage,
-              },
-            },
-          ],
-        },
+            { type: 'text', text: 'You are an architectural and interior design expert. Your task is to determine if an image represents an architectural or interior design subject (building, interior room, floor plan, facade, furniture, cabinetry, built-in shelves, etc.). Respond ONLY with a JSON object: {"isArchitecture": boolean, "confidence": number, "reason": string}' },
+            { 
+              type: 'image_url', 
+              image_url: { url: imageBase64 } 
+            }
+          ]
+        }
       ],
-      max_tokens: 1024,
       temperature: 0.1,
-      stream: false
-    }, { timeout: 30000 });
+      response_format: { type: 'json_object' }
+    });
     
     const content = extractContent(response.data);
     return parseJsonResponse(content);
   },
 
   async generatePrompt(scanResult: any, configParams: any, mode: 'single' | 'blocks') {
-    const negativePrompt = `CGI, render, 3D render, unreal engine, octane render, vray, blender, digital art, artificial lighting, studio lighting, harsh shadows, oversaturated, low quality, blurry, distorted, watermark, text, people, illustration, painting, sketch, cartoon, plastic texture, fake, synthetic, computer generated, sketchup, maquete, maquette, architectural model, clay render, wireframe, added windows, added doors, added openings, extra furniture, invented objects, hallucinated elements, curtains where there are walls, blinds on solid walls, symmetrical composition, perfect geometry, raytracing.`;
+    await usageService.logUsage('prompt', { metadata: { mode } });
+    const negativePrompt = `(3d render, CGI, blender, unreal engine, octane render, corona render, vray, lumion, twinmotion, sketchup, revit screenshot, architectural visualization, digital render, computer generated, path tracing, ray tracing:1.5), 
+(perfect symmetry, mathematically clean lines, sterile environment, hospital white, perfect even lighting, flat ambient occlusion, uniform texture, perfectly smooth surfaces, no grain, crisp digital sharpness:1.4),
+(plastic texture, oversaturated colors, digital art, illustration, painting, cartoon, anime, low quality, blurry, deformed, extra architectural elements not in original, modified building design, wrong materials, added windows, extra floors, changed proportions, generic trees, perfectly symmetrical garden:1.3),
+watermark, text, people, illustration, painting, sketch, cartoon, fake, synthetic, maquete, maquette, architectural model, clay render, wireframe, added windows, added doors, added openings, extra furniture, invented objects, hallucinated elements, curtains where there are walls, blinds on solid walls, added borders, added beams, modified structural corners, changed material locations, invented lighting fixtures, modified pendant shapes.`;
 
-    const systemPrompt = `Você é um engenheiro de prompts arquitetônicos especialista. Seu objetivo é transformar dados técnicos de ScanResult e configurações do usuário em prompts de alta fidelidade e fotorrealistas para o modelo Nano Banana (Gemini 2.5 Flash Image).
+const systemPrompt = `Você é um engenheiro de prompts arquitetônicos de elite, especializado em FIDELIDADE ESTRUTURAL ABSOLUTA. Seu objetivo é transformar dados técnicos de ScanResult em prompts que gerem imagens 100% fiéis à referência, sem NENHUMA invenção ou acréscimo.
+
+[POLÍTICA ZERO INVENÇÃO - GUARDRAILS CRÍTICOS]
+1. PROIBIÇÃO DE ADIÇÕES: É terminantemente proibido adicionar bordas, vigas, pilares, degraus ou qualquer elemento estrutural que não esteja explicitamente no ScanResult.
+2. PRESERVAÇÃO DE MATERIAIS: Se um canto ou parede é mapeado como 'madeira', ele DEVE permanecer madeira até o limite da face. Não substitua por concreto ou qualquer outro material "por estética".
+3. FIDELIDADE DE OBJETOS: Luminárias, pendentes e equipamentos devem manter a forma e cor descritas. Não transforme pendentes escuros em globos brilhantes se a referência não indicar isso.
+4. ALINHAMENTO GEOMÉTRICO: Mantenha os encontros de planos (teto/parede, parede/piso) exatamente como na volumetria. Não crie "molduras" ou "bordas" de transição inexistentes.
+5. INTEGRIDADE ESTRUTURAL (SCAN): Use os dados de 'structural_integrity' para reforçar o que NÃO deve ser alterado. Se houver 'artifact_prevention_notes', siga-as como ordens diretas.
 
 [CRITICAL: IDIOMA]
 O prompt gerado deve estar INTEGRALMENTE em PORTUGUÊS DO BRASIL.
@@ -477,19 +630,174 @@ O prompt gerado deve estar INTEGRALMENTE em PORTUGUÊS DO BRASIL.
 Você DEVE SEMPRE incluir este prompt negativo na sua resposta:
 "${negativePrompt}"
 
-[CRITICAL: NANO BANANA (GEMINI 2.5 FLASH IMAGE) RULES]
-Este modelo é extremamente capaz de seguir instruções detalhadas. Seja muito específico, descritivo e use parâmetros de documentação técnica.
+[TOOL-B1: MOTOR DE BLOCO 1 - ARQUITETURA BASE (FIDELIDADE MÁXIMA)]
+Este bloco é a âncora estrutural. Use os pesos de atenção mais altos aqui.
+Regra absoluta: descrever somente o que foi registrado no ScanResult. Zero adições. Zero melhorias.
 
-[CRITICAL: PLANTA_BAIXA (TOP-DOWN) RULES]
-Se a tipologia for PLANTA_BAIXA:
-1. Use o parâmetro 'topDownAngle':
-   - 90°: Descreva como "perspectiva superior (top-down)", "vista aérea (bird's eye view)", "planta baixa arquitetônica perfeitamente vertical".
-   - 45°: Descreva como "perspectiva isométrica", "corte arquitetônico 3D", "vista axonometrica".
-2. Use o parâmetro 'environmentType' (Contexto: Brasil):
-   - CONDOMINIO_ALTO_PADRAO: "Condomínio fechado brasileiro de alto padrão", "paisagismo residencial de luxo", "arquitetura contemporânea sofisticada".
-   - URBANO: "Ambiente urbano brasileiro", "contexto de cidade", "densidade metropolitana".
-   - RURAL: "Paisagem rural brasileira", "cenário de campo", "arquitetura integrada à natureza".
-   - BAIRRO_COMUM: "Bairro brasileiro típico", "área residencial comum", "contexto suburbano".
+ETAPA 1 - VOLUMES (PRESERVAÇÃO ESTRUTURAL):
+- Identificar volume dominante e secundários.
+- Use 'junction_analysis' para descrever encontros de planos: "clean 90-degree wood-to-ceiling junction".
+- Use 'boundary_preservation' para garantir limites de materiais: "wood paneling extending to the far right corner edge without interruption".
+- Se houver 'artifact_prevention_notes', inclua-as como restrições negativas no corpo do prompt: "no concrete pillars at the wood wall corner", "no added borders on top".
+
+ETAPA 2 - MATERIAIS (MAPEAMENTO EXATO):
+- Mapear material para a posição EXATA.
+- Se o ScanResult indica madeira em uma quina, reforce: "wood paneling extending exactly to the corner edge".
+- Pesos: Use pesos altos para garantir que o modelo não mude o material: ((material_token:1.5)).
+
+ETAPA 3 - ESQUADRIAS E ILUMINAÇÃO:
+- Descreva a forma exata das luminárias: "cylindrical black pendants" ou "spherical glass globes" conforme o scan.
+- Não permita que a IA de imagem decida o design das peças.
+
+[TOOL-B2: MOTOR DE BLOCO 2 - SISTEMA DE CAMERA (ÓPTICA E FÍSICA)]
+Este bloco define a física óptica e o equipamento de captura.
+Regra absoluta: NUNCA alterar o ponto de vista (height_m e distance_m) do scan original.
+
+1. SELEÇÃO DE EQUIPAMENTO (DETERMINÍSTICA):
+   Se configParams.cameraSelection estiver presente, use o modelo escolhido. Caso contrário, selecione com base no estilo:
+   - CANON: 
+     * EOS R5 + RF 35mm f/1.4L USM (Textura: Sharpness cirúrgico, bokeh cremoso, aberração cromática zero).
+     * EOS R3 + RF 85mm f/1.2L DS (Efeito: Defocus Smoothing, transições de desfoque ultra-suaves).
+   - NIKON: 
+     * Z9 + NIKKOR Z 35mm f/1.8 S (Textura: Contraste micro-detalhado, renderização de cores neutra).
+     * Z8 + NIKKOR Z 50mm f/1.2 S (Efeito: Profundidade tridimensional, separação de planos extrema).
+   - SONY: 
+     * Alpha 7R V + FE 35mm f/1.4 GM (Textura: Resolução 61MP, detalhes finos em texturas de materiais).
+     * Venice 2 + Zeiss Master Prime (Efeito: Look cinematográfico orgânico, flare controlado, zero distorção).
+   - PANASONIC: 
+     * Lumix S1H + Leica DG Summilux 35mm (Textura: Renderização "Leica look", transições tonais suaves).
+     * Lumix GH6 + Olympus M.Zuiko 12-40mm Pro (Efeito: Nitidez de ponta a ponta, versatilidade técnica).
+   - iPHONE (iOS System): 
+     * iPhone 15 Pro Max (Main 24mm f/1.78, 7-element lens, 100% Focus Pixels).
+     * iPhone 14 Pro (Main 24mm, Deep Fusion, Photonic Engine).
+     * iPhone 13 Pro (Main 26mm, Night mode, Smart HDR 4).
+     Use "Shot on iPhone" aesthetics: HDR computacional, nitidez digital equilibrada, cores vibrantes iOS.
+
+2. CONFIGURAÇÃO ÓPTICA:
+   - Use o 'focal_apparent' do scan para selecionar a lente mais próxima.
+   - Abertura: f/8 (nitidez total), f/2.8 (separação suave), f/1.2 (bokeh profundo).
+   - ISO: 100 (limpeza total), 800-3200 (grão cinematográfico).
+   - Filtros: Black Pro-Mist 1/8 ou 1/4 para micro-difusão de luz.
+
+3. METADADOS EXIF:
+   - Inclua sempre: "Shot on [Camera] with [Lens], f/[N], ISO [N], [N]mm".
+
+[SAÍDA DO BLOCO 1 & 2 - PT-BR OBRIGATÓRIO]
+- Badge obrigatório: 🇧🇷 [PT-BR VALIDADO - FIDELIDADE TOTAL].
+- Título: M&Q STUDIO — BLOCO 1 & 2: ARQUITETURA E CÂMERA.
+
+[TOOL-B3: MOTOR DE BLOCO 3 - REGIME LUMINOSO (FÍSICA ATMOSFÉRICA)]
+Este bloco define o sistema físico de iluminação completo.
+Regra: a direção azimutal da luz nunca muda entre modos (preservar do scan original).
+
+ETAPA 1 - DIREÇÃO ORIGINAL:
+- Mantenha a direção azimutal do scan (N, NE, E, SE, S, SW, W, NW).
+- Converta para descrição: "from the [direction], [morning/afternoon/raking] light".
+
+ETAPA 2 - PROCESSAMENTO POR MODO:
+- MODO 1 (Editorial): 5500K, sol a 45-65°, sombras curtas/médias, bordas definidas.
+- MODO 2 (Golden Hour): 2700K-3200K, sol a 5-15°, sombras muito longas, bordas suavizadas, "golden haze".
+- MODO 3 (Blue Hour): 8000K-12000K céu, 2700K-3200K interior, ilhas de calor vs campo frio.
+- MODO 4 (Noir): Noite fechada, fontes pontuais (2100K sódio, 5600K LED), contraste extremo (20:1), halação.
+- MODO 5 (Atmosférico): Céu encoberto (6500K-8000K), luz difusa absoluta, sem sombras, superfícies molhadas (reflexos e saturação).
+
+ETAPA 3 - FENÔMENOS E SOMBRAS:
+- Calcule o comprimento das sombras com base no ângulo (ex: 15° = 3.7x altura).
+- Descreva a interação luz-material: "raking light revealing concrete formwork grain".
+
+[TOOL-B4: MOTOR DE BLOCO 4 - COMPLETAÇÃO INTERIOR (AMBIENTAÇÃO COERENTE)]
+Ativado apenas se houver aberturas visíveis. Regra: Extensão lógica do 'style_code'.
+
+ETAPA 1 - VISIBILIDADE:
+- Descrever o interior através dos vidros (glazing system, janelas).
+- Staging em 3 camadas: Plano 1 (piso/móveis próximos), Plano 2 (mobiliário/luminárias), Plano 3 (fundo/escadas).
+
+ETAPA 2 - MAPEAMENTO DE ESTILO (style_code):
+- contemp: Sofás clean, porcelanato grande formato, pendentes 3000K.
+- minimalista: Volumes puros, zero ornamento, iluminação oculta.
+- colonial: Madeira maciça, ladrilho hidráulico, vigas expostas, 2700K.
+- industrial: Tijolo aparente, tubulações expostas, couro, lâmpadas Edison.
+- brutalista: Concreto aparente, mobiliário pesado, monasticismo curado.
+
+ETAPA 3 - SINAIS DE OCUPAÇÃO:
+- Adicione 3-5 sinais: livro aberto, copo meio cheio, planta interna, vapor de caneca.
+
+[TOOL-B5: MOTOR DE BLOCO 5 - COMPLETAÇÃO EXTERIOR (PAISAGISMO E CONTEXTO)]
+Regra: Arquitetura ocupa 55-65% do frame. Vegetação caótica + vida discreta.
+
+ETAPA 1 - SELEÇÃO BOTÂNICA (Brasileira):
+- Árvore Estrutural: Ipê Amarelo, Palmeira Imperial, Sibipiruna, Pau-mulato.
+- Arbustos: Quaresmeira, Heliconia, Ráfis, Agave.
+- Forração: Grama Esmeralda, Bromélias.
+
+ETAPA 2 - COMPOSIÇÃO ASSIMÉTRICA:
+- Nunca posicione duas árvores no mesmo eixo. Árvore primária deve estar lateral e parcialmente cortada.
+- Use 3 planos de profundidade: Antecampo, Edifício, Fundo.
+
+ETAPA 3 - CONTEXTO URBANO HONESTO:
+- Calçada padrão, postes com fiação aérea, interfones, sinais de vida (carro no limite do frame, bicicleta).
+
+[TOOL-B6: MOTOR DE BLOCO 6 - MATERIALIDADE E FINALIZACAO (ANTI-CGI)]
+Camada final de realismo fotográfico.
+
+ETAPA 1 - MATERIALIDADE QUEBRADA (Pares Contraditórios):
+- Concreto: Marcas de fôrma + manchas de escorrimento mineral.
+- Madeira: Veios naturais + pátina de UV ou micro-fissuras.
+- Vidro: Reflexos do céu + micro-poeira ou condensação nas quinas.
+
+ETAPA 2 - IMPERFEIÇÕES ÓPTICAS:
+- Aberração cromática sutil (1-2px), vinheta óptica natural, grão de ruído digital (ISO alto).
+
+ETAPA 3 - COLOR SCIENCE DIRECIONAL:
+- Split-toning: sombras frias (cyan/blue), highlights quentes (orange/amber).
+- Curva S fotográfica (não linear).
+
+[SAÍDA DOS BLOCOS 3 A 6 - PT-BR OBRIGATÓRIO]
+- Badge obrigatório: 🇧🇷 [PT-BR VALIDADO - REALISMO FOTOGRÁFICO].
+- Títulos: M&Q STUDIO — BLOCO 3 (Luz), BLOCO 4 (Interior), BLOCO 5 (Exterior), BLOCO 6 (Finalização).
+
+[CRITICAL: PLANTA_BAIXA (TOP-DOWN) HUMANIZATION RULES]
+Se a tipologia for PLANTA_BAIXA, ative o MOTOR DE HUMANIZAÇÃO (TOOL-PLANTA):
+1. Princípio Operacional: Converta a planta técnica em uma vista aérea fotorrealista (drone 70-90°). O resultado deve ser indistinguível de uma fotografia real.
+2. Motor de Materiais por Ambiente:
+   - PISCINA: Porcelana azul-turquesa, água com cáusticos, turbidez natural, reflexo do céu, ondulação micro.
+   - ÁREA GOURMET/VARANDA: Porcelana retificada grande formato (cimento/travertino), semi-brilho.
+   - DECK DE MADEIRA: Ipê ou Cumaru, ripas visíveis, veios naturais, sombras projetadas.
+   - GARAGEM: Concreto polido limpo, epóxi cinza uniforme ou porcelana antiderrapante. Evite manchas ou texturas orgânicas excessivas no piso da garagem.
+   - SALA/LIVING: Porcelana polida/acetinada off-white/greige.
+   - QUADRA: Manta sintética colorida com marcações brancas.
+   - JARDIM: Grama esmeralda densa, bordas definidas, cobertura de solo natural.
+3. Motor de Mobiliário e Veículos (Vista de Cima):
+   - VEÍCULOS (NA GARAGEM): Se houver veículos na planta, descreva-os como objetos 3D reais vistos de cima. Especifique: "Carro sedan branco", "SUV prata", "Caminhonete preta". Adicione reflexos nos vidros e tetos metálicos, sombras projetadas no piso da garagem e oclusão de ambiente sob as rodas.
+   - ESPREGUIÇADEIRAS: Almofadas creme, sombras projetadas, toalha dobrada (sinal de uso).
+   - SOMBREIRO: Octogonal/redondo, tecido bege, sombras das hastes, pole central.
+   - MESA GOURMET: Tampo em madeira/mármore, cadeiras com assentos visíveis, assimetria leve.
+   - SOFÁ EXTERNO: Modular em L, almofadas arranjadas, tapete de fibra natural (sisal/juta).
+4. Motor de Vegetação Aérea (Vista de Cima):
+   - PALMEIRAS: Copas circulares radiantes, verde saturado, sombras elípticas.
+   - ÁRVORES LARGAS: Copas irregulares em camadas, profundidade visual, sombras suaves.
+   - JARDIM TROPICAL: Mix denso de formas irregulares, profundidade textural.
+5. Sistema de Câmera Aérea:
+   - Ângulo A (80°): Drone quase vertical, fidelidade máxima à planta.
+   - Ângulo B (60°): Perspectiva elevada, volume e profundidade.
+   - Ângulo C (45°): Aérea lateral, contexto de terreno.
+6. Regimes de Luz:
+   - Dia Claro Manhã: Sol lateral, sombras longas, 5500K.
+   - Meio Dia: Sol vertical, sombras mínimas, 6000K.
+   - Golden Hour: Luz dourada diagonal, sombras longas aquecidas, 3200K.
+   - Blue Hour: Iluminação artificial ativa, piscina iluminada, 8000K exterior.
+7. Estilos: Minimalista, Tropical, Contemporâneo.
+
+[CRITICAL: PLANTA_BAIXA (TOP-DOWN) PROMPT STRUCTURE]
+Se isFloorPlan for true, siga esta hierarquia de prompt:
+1. Definição de Mídia: "photorealistic aerial architectural photography, top-down drone view,"
+2. Estrutura Fiel: Descreva cada ambiente EXATAMENTE como na planta, preservando proporções e a CONTAGEM EXATA de objetos (ex: número de cadeiras, número de carros).
+3. Materialidade: Adicione imperfeições naturais (juntas, desgaste leve, turbidez na água), mas mantenha a limpeza técnica onde apropriado (ex: garagem).
+4. Mobiliário e Veículos: Descreva a vista aérea com sombras realistas, reflexos metálicos e assimetria de uso.
+5. Vegetação: Copas visíveis de cima com sombras elípticas.
+6. Luz: Aplique o regime de luz selecionado com parâmetros de temperatura e direção.
+7. Câmera: Especifique câmera (DJI Inspire 3/Mavic 3 Pro), lente e altura AGL.
+8. Imperfeições: Vinheta natural, aberração cromática leve, névoa atmosférica.
 
 [GENERAL RULES]
 - Foque em materiais (PBR), iluminação (qualidade V-Ray) e configurações de câmera.
@@ -515,10 +823,10 @@ ${mode === 'single' ? `
 - No final, inclua um objeto JSON de análise de qualidade neste formato:
 [QUALITY_ANALYSIS: { "score": 85, "breakdown": { "clarity": 88, "specificity": 82, "coherence": 85, "brevity": 80 } }]
 ` : `
-- Gere 4-6 blocos temáticos.
+- Gere 6 blocos temáticos obrigatórios.
 - Retorne um objeto JSON com: { "blocks": [{ "block_type": string, "title": string, "content": string, "word_count": number, "engine_recommendation": string, "quality_score": number, "quality_breakdown": { "clarity": number, "specificity": number, "coherence": number, "brevity": number } }], "overall_quality_score": number, "overall_quality_breakdown": { "clarity": number, "specificity": number, "coherence": number, "brevity": number }, "total_word_count": number }.
-- Tipos de bloco: "visual_style", "materials_textures", "lighting", "camera_composition", "post_production", "technical_params".
-- Cada bloco deve ser independente e detalhado (100-200 palavras cada). O bloco "technical_params" DEVE conter o "--- RESUMO DE CONFIGURAÇÃO TÉCNICA ---" com todos os dados de ConfigParams.
+- Tipos de bloco: "architecture_base", "camera_system", "lighting_regime", "interior_completion", "exterior_completion", "materiality_finishing".
+- Cada bloco deve ser independente e detalhado (150-250 palavras cada). O bloco "materiality_finishing" DEVE conter o "--- RESUMO DE CONFIGURAÇÃO TÉCNICA ---" com todos os dados de ConfigParams.
 `}
 
 [MANDATORY: TECHNICAL CONFIGURATION SUMMARY]
@@ -532,29 +840,27 @@ Formato de saída: ${mode === 'single' ? 'Texto plano com JSON de análise ao fi
     ConfigParams: ${JSON.stringify(configParams)}
     Mode: ${mode}`;
 
-    const response = await axios.post('/api/kie/gemini', {
-      model: 'gemini-3.1-pro',
-      messages: [
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: systemPrompt },
-            { type: 'text', text: userMessage }
-          ]
-        }
-      ],
-      max_tokens: 4096,
-      temperature: 0.7,
-      stream: false
-    }, { timeout: 60000 });
+    try {
+      const response = await axios.post('/api/kie/gemini-2.5-pro/v1/chat/completions', {
+        model: 'gemini-2.5-pro',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userMessage }
+        ],
+        temperature: 0.7
+      });
 
-    const content = extractContent(response.data);
-    if (mode === 'blocks') {
-      return parseJsonResponse(content);
-    }
-    
-    // Parse quality analysis for single mode
-    const analysisMatch = content.match(/\[QUALITY_ANALYSIS:\s*({[\s\S]*?})\]/);
+      const content = extractContent(response.data);
+      if (!content) {
+        throw new Error('AI_RESPONSE_EMPTY');
+      }
+
+      if (mode === 'blocks') {
+        return parseJsonResponse(content);
+      }
+      
+      // Parse quality analysis for single mode
+      const analysisMatch = content.match(/\[QUALITY_ANALYSIS:\s*({[\s\S]*?})\]/);
     let qualityScore = 85;
     let qualityBreakdown = { clarity: 80, specificity: 80, coherence: 85, brevity: 80 };
     
@@ -573,50 +879,172 @@ Formato de saída: ${mode === 'single' ? 'Texto plano com JSON de análise ao fi
       qualityScore,
       qualityBreakdown
     };
+    } catch (error) {
+      console.error('Error in generatePrompt:', error);
+      throw error;
+    }
   },
 
   async generateImage(params: {
     prompt: string;
     model: 'nano-banana-2' | 'nano-banana-pro';
-    resolution: '1K' | '2K' | '4K';
+    resolution: '1K' | '2K' | '3K';
     aspect_ratio: string;
     image_input?: string[];
+    sessionId: string;
+    creditsCost: number;
   }) {
-    const response = await axios.post('/api/kie/nano-banana/create', {
-      model: params.model,
-      input: {
-        prompt: params.prompt,
-        image_input: params.image_input || [],
-        aspect_ratio: params.aspect_ratio,
-        resolution: params.resolution,
-        output_format: 'jpg'
-      }
+    await usageService.logUsage('image', { 
+      model: params.model, 
+      resolution: params.resolution,
+      metadata: { sessionId: params.sessionId } 
     });
+    const userId = auth.currentUser?.uid;
+    if (!userId) throw new Error('AUTH_REQUIRED');
+
+    const generationId = `gen_${Date.now()}`;
     
-    if (response.data.code !== 200) {
-      throw new Error(response.data.msg || "Failed to create generation task");
+    // 1. Create initial record in Firestore
+    await setDoc(doc(db, 'image_generations', generationId), {
+      id: generationId,
+      userId,
+      sessionId: params.sessionId,
+      promptContent: params.prompt,
+      generationStatus: 'queued',
+      progressPercentage: 0,
+      currentResolution: params.resolution.toLowerCase(),
+      kieApiModel: params.model,
+      creditsCost: params.creditsCost,
+      creditsDeducted: true,
+      createdAt: new Date().toISOString(),
+      isCompleted: false,
+      isPreviewReady: false,
+      retryCount: 0
+    });
+
+    // 2. Call KIE API
+    try {
+      console.log(`[KIE] Creating task for model: ${params.model}`);
+      const response = await axios.post('/api/kie/v1/nano-banana/create', {
+        model: params.model,
+        input: {
+          prompt: params.prompt,
+          image_input: params.image_input || [],
+          aspect_ratio: params.aspect_ratio,
+          resolution: params.resolution,
+          output_format: 'jpg'
+        }
+      });
+      
+      const data = response.data;
+      if (data.code !== 200) {
+        throw new Error(data.msg || "Erro ao criar tarefa");
+      }
+      
+      const taskId = data.data.taskId;
+      console.log(`[KIE] Task created: ${taskId}`);
+
+      // 3. Update record with taskId
+      await updateDoc(doc(db, 'image_generations', generationId), {
+        kieApiRequestId: taskId,
+        generationStatus: 'processing',
+        startedAt: new Date().toISOString()
+      });
+
+      return { taskId, generationId };
+    } catch (error: any) {
+      const errorMsg = error.response?.data?.msg || error.message;
+      console.error('[KIE] Generation Init Error:', errorMsg);
+      await updateDoc(doc(db, 'image_generations', generationId), {
+        generationStatus: 'failed',
+        errorMessage: errorMsg
+      });
+      throw error;
     }
-    
-    return response.data.data.taskId;
   },
 
-  async getTaskStatus(taskId: string) {
-    const response = await axios.get(`/api/kie/nano-banana/status/${taskId}`);
+  async getTaskStatus(taskId: string, generationId?: string) {
+    console.log(`[KIE] Checking status for task: ${taskId}`);
+    const response = await axios.get(`/api/kie/v1/nano-banana/status/${taskId}`);
+    const data = response.data;
     
-    if (response.data.code !== 200) {
-      throw new Error(response.data.msg || "Failed to get task status");
+    if (data.code !== 200 && data.code !== 100) {
+      throw new Error(data.msg || "Erro ao consultar status");
     }
     
-    return response.data.data;
+    const taskData = data.data || data;
+    // recordInfo uses 'state' instead of 'status'
+    const state = taskData.state || taskData.status;
+    console.log(`[KIE] Task ${taskId} state: ${state}`);
+
+    // Universal URL extraction
+    let resultUrl = taskData.result_url || 
+                    taskData.works?.[0]?.url || 
+                    taskData.data?.works?.[0]?.url ||
+                    taskData.data?.result_url;
+
+    // Handle recordInfo resultJson
+    if (!resultUrl && taskData.resultJson) {
+      try {
+        const parsedResult = JSON.parse(taskData.resultJson);
+        if (parsedResult.resultUrls && parsedResult.resultUrls.length > 0) {
+          resultUrl = parsedResult.resultUrls[0];
+        }
+      } catch (e) {
+        console.warn('[KIE] Failed to parse resultJson:', e);
+      }
+    }
+
+    if (generationId) {
+      const updateData: any = {
+        kieApiStatus: state,
+        updatedAt: new Date().toISOString()
+      };
+
+      // Map 'success' or 'completed' to 'completed'
+      if (state === 'completed' || state === 'success' || (data.code === 200 && resultUrl)) {
+        updateData.generationStatus = 'completed';
+        updateData.isCompleted = true;
+        updateData.completedAt = new Date().toISOString();
+        if (resultUrl) {
+          updateData.imageUrlPreview = resultUrl;
+          updateData.generationResultUrl = resultUrl;
+        }
+      } else if (state === 'failed' || state === 'error' || state === 'fail') {
+        updateData.generationStatus = 'failed';
+        updateData.errorMessage = taskData.msg || 'Erro na geração';
+      }
+
+      updateDoc(doc(db, 'image_generations', generationId), updateData).catch(() => {});
+    }
+    
+    return { ...taskData, resultUrl, status: state };
+  },
+
+  async logCreditTransaction(params: {
+    amount: number;
+    type: 'debit' | 'credit' | 'refund';
+    reason: string;
+    referenceId?: string;
+  }) {
+    const userId = auth.currentUser?.uid;
+    if (!userId) return;
+
+    const logId = `log_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+    await setDoc(doc(db, 'credit_audit_logs', logId), {
+      id: logId,
+      userId,
+      amount: params.amount,
+      type: params.type,
+      reason: params.reason,
+      referenceId: params.referenceId || '',
+      createdAt: new Date().toISOString()
+    });
   },
 
   async analyzeMaterialImage(imageBase64: string): Promise<any> {
-    // Ensure imageBase64 is a proper data URL
-    let formattedImage = imageBase64;
-    if (!formattedImage.startsWith('data:')) {
-      formattedImage = `data:image/jpeg;base64,${formattedImage}`;
-    }
-
+    await usageService.logUsage('scan', { metadata: { target: 'material' } });
+    
     const systemInstruction = `You are an expert architectural material analyst. Your task is to analyze a single image of a material and extract its physical and PBR properties.
     
     [OBJECTIVE]
@@ -630,23 +1058,25 @@ Formato de saída: ${mode === 'single' ? 'Texto plano com JSON de análise ao fi
     
     [SCHEMA REFERENCE]
     ${JSON.stringify(MaterialSchema.shape, null, 2)}`;
-
-    const response = await axios.post('/api/kie/gemini', {
-      model: 'gemini-3.1-pro',
+    
+    const response = await axios.post('/api/kie/gemini-2.5-pro/v1/chat/completions', {
+      model: 'gemini-2.5-pro',
       messages: [
-        {
-          role: 'user',
+        { role: 'system', content: systemInstruction },
+        { 
+          role: 'user', 
           content: [
-            { type: 'text', text: systemInstruction },
             { type: 'text', text: 'Analyze this material image and extract its properties as JSON.' },
-            { type: 'image_url', image_url: { url: formattedImage } }
+            { 
+              type: 'image_url', 
+              image_url: { url: imageBase64 } 
+            }
           ]
         }
       ],
-      max_tokens: 4096,
       temperature: 0.7,
-      stream: false
-    }, { timeout: 60000 });
+      response_format: { type: 'json_object' }
+    });
 
     const content = extractContent(response.data);
     return parseJsonResponse(content);

@@ -134,6 +134,9 @@ export const CameraViewfinder: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-4">
+          <button className="p-2 bg-white/5 hover:bg-white/10 rounded-full transition-colors" title="Mover Câmera">
+            <Move size={16} className="text-white/60" />
+          </button>
           <button className="p-2 bg-white/5 hover:bg-white/10 rounded-full transition-colors">
             <Maximize2 size={16} className="text-white/60" />
           </button>

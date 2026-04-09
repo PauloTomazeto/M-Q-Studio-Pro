@@ -13,116 +13,59 @@ const __dirname = path.dirname(__filename);
 async function startServer() {
   const app = express();
   const PORT = 3000;
-  const KIE_API_KEY = process.env.KIE_API_KEY || "b7e6d04e2b37c593a0f8dac63ef612e9";
 
   app.use(express.json({ limit: '50mb' }));
 
-  // KIE API Proxy Endpoints
-  app.post("/api/kie/gemini", async (req, res) => {
-    console.log(`[KIE Proxy] Request to Gemini API. Key suffix: ...${KIE_API_KEY.slice(-4)}`);
+  // KIE API Proxy
+  app.all("/api/kie/*", async (req, res) => {
     try {
-      const response = await axios.post(
-        "https://api.kie.ai/gemini-3.1-pro/v1/chat/completions",
-        req.body,
-        {
-          headers: {
-            Authorization: `Bearer ${KIE_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-          timeout: 120000 // 120s timeout for AI response
-        }
-      );
-      console.log("[KIE Proxy] Gemini API Success");
-      res.json(response.data);
+      const subPath = req.params[0];
+      const apiKey = process.env.KIE_API_KEY || "b7e6d04e2b37c593a0f8dac63ef612e9";
+      const targetUrl = `https://api.kie.ai/${subPath}`;
+
+      console.log(`Proxying ${req.method} request to KIE: ${targetUrl}`);
+
+      const response = await axios({
+        method: req.method,
+        url: targetUrl,
+        data: req.body,
+        params: req.query,
+        headers: {
+          "Authorization": `Bearer ${apiKey}`,
+          "x-api-key": apiKey,
+          "Content-Type": "application/json"
+        },
+        timeout: 180000 // Increased to 180s for very slow responses
+      });
+
+      console.log(`KIE Response Status: ${response.status}`);
+      res.status(response.status).json(response.data);
     } catch (error: any) {
-      const status = error.response?.status || 500;
-      const errorData = error.response?.data || error.message;
-      console.error(`[KIE Proxy] Gemini API Error (${status}):`, JSON.stringify(errorData));
-      res.status(status).json(errorData);
+      console.error("KIE Proxy Error:", error.message);
+      if (error.response) {
+        const errorData = error.response.data;
+        const responsePayload = typeof errorData === 'string' && errorData.includes('<!doctype html>') 
+          ? { error: "KIE_API_HTML_ERROR", message: "Target API returned HTML instead of JSON", raw: errorData.substring(0, 500) }
+          : errorData;
+        res.status(error.response.status).json(responsePayload);
+      } else if (error.code === 'ECONNABORTED') {
+        res.status(504).json({ error: "Gateway Timeout", message: "KIE API took too long to respond (180s limit)" });
+      } else {
+        res.status(500).json({ error: "Internal Server Error", message: error.message, code: error.code });
+      }
     }
   });
 
-  app.post("/api/kie/kling", async (req, res) => {
-    try {
-      const response = await axios.post(
-        "https://api.kie.ai/api/v1/jobs/createTask",
-        req.body,
-        {
-          headers: {
-            Authorization: `Bearer ${KIE_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-      res.json(response.data);
-    } catch (error: any) {
-      console.error("KIE Kling Error:", error.response?.data || error.message);
-      res.status(error.response?.status || 500).json(error.response?.data || { error: "Internal Server Error" });
-    }
+  // Stripe Integration Preparation
+  app.post("/api/stripe/create-checkout-session", async (req, res) => {
+    const { planId, userId, email } = req.body;
+    // This will be implemented when Stripe API key is provided
+    res.json({ url: 'https://checkout.stripe.com/pay/placeholder' });
   });
 
-  app.get("/api/kie/kling/status/:taskId", async (req, res) => {
-    try {
-      const response = await axios.get(
-        `https://api.kie.ai/api/v1/jobs/getTask?taskId=${req.params.taskId}`,
-        {
-          headers: {
-            Authorization: `Bearer ${KIE_API_KEY}`,
-          },
-        }
-      );
-      res.json(response.data);
-    } catch (error: any) {
-      console.error("KIE Kling Status Error:", error.response?.data || error.message);
-      res.status(error.response?.status || 500).json(error.response?.data || { error: "Internal Server Error" });
-    }
-  });
-
-  // Nano Banana endpoints
-  app.post("/api/kie/nano-banana/create", async (req, res) => {
-    console.log("[KIE Proxy] Nano Banana Create Task:", {
-      model: req.body.model,
-      promptLength: req.body.input?.prompt?.length,
-      imageCount: req.body.input?.image_input?.length,
-      resolution: req.body.input?.resolution,
-      aspect_ratio: req.body.input?.aspect_ratio
-    });
-    try {
-      const response = await axios.post(
-        "https://api.kie.ai/api/v1/jobs/createTask",
-        req.body,
-        {
-          headers: {
-            Authorization: `Bearer ${KIE_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-        }
-      );
-      console.log("[KIE Proxy] Nano Banana Success:", response.data.code);
-      res.json(response.data);
-    } catch (error: any) {
-      const status = error.response?.status || 500;
-      const errorData = error.response?.data || error.message;
-      console.error(`[KIE Proxy] Nano Banana Error (${status}):`, JSON.stringify(errorData));
-      res.status(status).json(errorData);
-    }
-  });
-
-  app.get("/api/kie/nano-banana/status/:taskId", async (req, res) => {
-    try {
-      const response = await axios.get(
-        `https://api.kie.ai/api/v1/jobs/getTask?taskId=${req.params.taskId}`,
-        {
-          headers: {
-            Authorization: `Bearer ${KIE_API_KEY}`,
-          },
-        }
-      );
-      res.json(response.data);
-    } catch (error: any) {
-      console.error("KIE Nano Banana Status Error:", error.response?.data || error.message);
-      res.status(error.response?.status || 500).json(error.response?.data || { error: "Internal Server Error" });
-    }
+  app.post("/api/stripe/webhook", express.raw({ type: 'application/json' }), (req, res) => {
+    // This will handle Stripe webhooks to update user plans in Firestore
+    res.json({ received: true });
   });
 
   // Vite middleware for development

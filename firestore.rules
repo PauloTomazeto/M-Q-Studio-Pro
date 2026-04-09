@@ -46,35 +46,64 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return isAuthenticated() && 
-        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
-         (request.auth.token.email == "paulosilvatomazeto@gmail.com" && request.auth.token.email_verified == true));
+      return isAuthenticated() && (
+        (request.auth.token.email == "paulosilvatomazeto@gmail.com" ||
+         request.auth.token.email == "paulo.silva.tamazeta@gmail.com") ||
+         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
+      );
     }
 
     function isValidUser(data) {
       return data.keys().hasAll(['uid', 'email', 'role', 'plan', 'credits']) &&
-             data.uid == request.auth.uid &&
              data.role in ['admin', 'user'] &&
              data.plan in ['basic', 'pro', 'premium'] &&
-             data.credits is int && data.credits >= 0;
+             data.credits is number && data.credits >= 0;
     }
 
     function isValidProject(data) {
-      return data.keys().hasAll(['id', 'userId', 'name', 'status']) &&
+      return data.keys().hasAll(['userId', 'name', 'prompt']) &&
              data.userId == request.auth.uid &&
-             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
-             data.status in ['draft', 'in_progress', 'completed', 'archived'];
+             data.name is string && data.name.size() > 0 && data.name.size() < 100;
+    }
+
+    function isValidImageGeneration(data) {
+      return data.keys().hasAll(['id', 'userId', 'sessionId', 'promptContent', 'generationStatus']) &&
+             data.userId == request.auth.uid &&
+             data.generationStatus in ['queued', 'processing', 'preview_ready', 'completed', 'failed', 'cancelled'];
+    }
+
+    function isValidCreditAuditLog(data) {
+      return data.keys().hasAll(['id', 'userId', 'amount', 'type', 'reason', 'createdAt']) &&
+             data.userId == request.auth.uid &&
+             data.type in ['debit', 'credit', 'refund'];
     }
 
     // ===============================================================
     // Rules
     // ===============================================================
 
-    match /users/{userId} {
-      allow read: if isOwner(userId) || isAdmin();
-      allow create: if isAuthenticated() && isValidUser(request.resource.data) && (request.resource.data.role == 'user' || isAdmin());
-      allow update: if (isOwner(userId) && isValidUser(request.resource.data) && request.resource.data.role == resource.data.role) || isAdmin();
+    match /image_generations/{generationId} {
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isAuthenticated() && isValidImageGeneration(request.resource.data);
+      allow update: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin()) && isValidImageGeneration(request.resource.data);
       allow delete: if isAdmin();
+    }
+
+    match /credit_audit_logs/{logId} {
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create: if isAuthenticated() && isValidCreditAuditLog(request.resource.data);
+      allow update, delete: if isAdmin();
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin() || (isAuthenticated() && resource.data.email == request.auth.token.email);
+      allow create: if isAuthenticated() && isValidUser(request.resource.data) && 
+                      (isAdmin() || (request.resource.data.uid == request.auth.uid && request.resource.data.role == 'user'));
+      allow update: if isAdmin() || 
+                      (isOwner(userId) && isValidUser(request.resource.data) && 
+                       request.resource.data.role == resource.data.role && 
+                       request.resource.data.uid == resource.data.uid);
+      allow delete: if isAdmin() || (isAuthenticated() && resource.data.email == request.auth.token.email);
     }
 
     match /projects/{projectId} {
@@ -155,6 +184,22 @@ service cloud.firestore {
 
     match /validation_logs/{logId} {
       allow read, write: if isAuthenticated() && (request.resource.data.userId == request.auth.uid || resource.data.userId == request.auth.uid || isAdmin());
+    }
+
+    match /plans/{planId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /usage_logs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isAdmin();
+    }
+
+    match /config/{configId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
     }
   }
 }

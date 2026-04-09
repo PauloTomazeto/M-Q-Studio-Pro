@@ -10,6 +10,15 @@ export const auth = getAuth(app);
 export const storage = getStorage(app);
 export const googleProvider = new GoogleAuthProvider();
 
+export const ADMIN_EMAILS = [
+  "paulosilvatomazeto@gmail.com",
+  "paulo.silva.tamazeta@gmail.com"
+];
+
+export const isAdminEmail = (email: string | null | undefined) => {
+  return email && ADMIN_EMAILS.includes(email);
+};
+
 export enum OperationType {
   CREATE = 'create',
   UPDATE = 'update',
