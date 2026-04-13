@@ -1,4 +1,3 @@
-
 export type ImageType = 
   | 'PLANTA_BAIXA' 
   | 'PERSPECTIVA' 
@@ -298,4 +297,41 @@ export interface CameraData {
   detected_at: string;
   camera_preset: string;
   editable: boolean;
+}
+
+export type GenerationResolution = '2k' | '2.5k' | '3k' | '4k';
+export type GenerationStatus = 'queued' | 'processing' | 'preview_ready' | 'completed' | 'failed' | 'cancelled';
+export type GenerationStage = 'initializing' | 'encoding_prompt' | 'model_processing' | 'rendering' | 'post_processing' | 'finalizing';
+
+export interface ImageGeneration {
+  image_generation_id: string;
+  user_id: string;
+  session_id: string;
+  prompt_config_id: string;
+  prompt_content: string;
+  generation_status: GenerationStatus;
+  progress_percentage: number;
+  progress_stage: GenerationStage;
+  estimated_time_remaining_seconds: number;
+  current_resolution: GenerationResolution;
+  image_url_preview: string | null;
+  image_url_2k: string | null;
+  image_url_2_5k: string | null;
+  image_url_3k: string | null;
+  image_url_4k: string | null;
+  generation_duration_seconds: number;
+  kie_api_model: string;
+  kie_api_request_id: string | null;
+  kie_api_status: string;
+  is_preview_ready: boolean;
+  is_completed: boolean;
+  credits_cost: number;
+  credits_deducted: boolean;
+  error_message: string | null;
+  error_code: string | null;
+  retry_count: number;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  is_favorite?: boolean;
 }

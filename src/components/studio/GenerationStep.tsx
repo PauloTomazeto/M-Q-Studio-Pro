@@ -2,16 +2,15 @@ import React, { useEffect, useState, useRef } from 'react';
 import { useStudioStore } from '../../store/studioStore';
 import { useCredits } from '../../hooks/useCredits';
 import { kieService } from '../../services/kieService';
-import { compressImage, uploadBase64ViaProxy, getProxyUrl } from '../../services/storageService';
+import { uploadTempImage, compressImage } from '../../services/storageService';
+import { imageGenerationService } from '../../services/imageGenerationService';
 import { auth, db } from '../../firebase';
-import { doc, updateDoc } from 'firebase/firestore';
+import { doc, updateDoc, setDoc } from 'firebase/firestore';
 import { 
   Loader2, Download, Share2, CheckCircle2, AlertCircle, 
   Image as ImageIcon, RefreshCw, Maximize2, Monitor, 
-  Smartphone, Square, Layout, Zap, Crown, Eye, Clock, Upload,
-  RotateCcw, Sparkles, ArrowRight, Info
+  Smartphone, Square, Layout, Zap, Crown, Eye, Clock
 } from 'lucide-react';
-import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'framer-motion';
 
 const STAGES = [
@@ -26,6 +25,7 @@ const STAGES = [
 const RESOLUTIONS = [
   { id: '1K', label: '1K (1024x768)', cost: 2, time: '~20-30s' },
   { id: '2K', label: '2K (2560x1920)', cost: 5, time: '~30-40s' },
+  { id: '3K', label: '3K (3840x2880)', cost: 12, time: '~60-80s' },
   { id: '4K', label: '4K (4096x3072)', cost: 20, time: '~80-120s' }
 ];
 
@@ -37,6 +37,11 @@ const ASPECT_RATIOS = [
   { id: '3:4', label: '3:4', icon: Layout },
   { id: '5:4', label: '5:4', icon: Layout },
   { id: '4:5', label: '4:5', icon: Layout }
+];
+
+const MODELS = [
+  { id: 'nano-banana-2', label: 'Nano Banana 2', description: 'Ótimo para imagens arquitetônicas detalhadas', costMultiplier: 1 },
+  { id: 'nano-banana-pro', label: 'Nano Banana Pro', description: 'Ultra realismo e renderizações de alto nível', costMultiplier: 1.5 }
 ];
 
 const GenerationStep: React.FC = () => {
@@ -55,25 +60,18 @@ const GenerationStep: React.FC = () => {
     mirrorImage,
     setSelectedModel,
     setSelectedResolution,
-    setMirrorImage,
-    mainImageUrl,
-    setMainImageUrl,
-    mirrorImageUrl,
-    setMirrorImageUrl,
-    setBase64Image,
-    setIsGenerating,
+    setSelectedAspectRatio,
     setGenerationTask,
-    setSelectedAspectRatio
+    setIsGenerating,
+    setMirrorImage
   } = useStudioStore();
-  
-  const [isUploadingMain, setIsUploadingMain] = useState(false);
-  const [isUploadingMirror, setIsUploadingMirror] = useState(false);
   
   const { consumeCredits, refundCredits } = useCredits();
   const [showPreview, setShowPreview] = useState(false);
-  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const unsubscribeRef = useRef<(() => void) | null>(null);
   const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const startTimeRef = useRef<number>(0);
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const getActivePrompt = () => {
     if (configParams.promptMode === 'single') return generatedPrompt;
@@ -88,8 +86,9 @@ const GenerationStep: React.FC = () => {
 
   useEffect(() => {
     return () => {
-      if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+      if (unsubscribeRef.current) unsubscribeRef.current();
       if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
+      if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
     };
   }, []);
 
@@ -101,37 +100,15 @@ const GenerationStep: React.FC = () => {
     const startTime = Date.now();
     startTimeRef.current = startTime;
 
-    setGenerationTask({
-      taskId: 'pending',
-      status: 'queued',
-      progress: 0,
-      stage: 'Iniciando...',
-      startTime
-    });
-
-    // Start progress timer
-    const totalDuration = 240; // seconds
-    const targetProgress = 95;
-    const incrementPerSecond = targetProgress / totalDuration;
-
-    if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
-    progressIntervalRef.current = setInterval(() => {
-      setGenerationTask((prev: any) => {
-        if (!prev || (prev.status !== 'queued' && prev.status !== 'processing')) return prev;
-        const elapsed = (Date.now() - startTime) / 1000;
-        const nextProgress = Math.min(elapsed * incrementPerSecond, targetProgress);
-        const stage = STAGES.find(s => nextProgress <= s.progress)?.label || 'Processando...';
-        return { ...prev, progress: nextProgress, stage };
-      });
-    }, 1000);
-
+    // Create initial document in Firestore via Service
     const resConfig = RESOLUTIONS.find(r => r.id === selectedResolution);
-    const cost = resConfig?.cost || 5;
+    const modelConfig = MODELS.find(m => m.id === selectedModel) || MODELS[0];
+    const cost = Math.ceil((resConfig?.cost || 5) * modelConfig.costMultiplier);
 
     try {
       const hasCredits = await consumeCredits(cost, 'image_generation');
+      
       if (!hasCredits) {
-        if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
         setGenerationTask({
           taskId: 'error',
           status: 'failed',
@@ -142,145 +119,171 @@ const GenerationStep: React.FC = () => {
         return;
       }
 
-      // DIRECT BASE64 FLOW REPLACED BY PROXY URL FLOW
-      const { mainImageUrl, mirrorImageUrl, sessionId } = useStudioStore.getState();
+      // 1. Prepare UI state
+      setGenerationTask({
+        taskId: 'pending',
+        status: 'queued',
+        progress: 0,
+        stage: 'Iniciando...',
+        startTime
+      });
 
-      if (!mainImageUrl) {
-        throw new Error('Você deve anexar a Imagem Principal para a geração.');
+      // Start visual progress simulation (caps at 95% until DB updates)
+      const totalDuration = 240; 
+      const targetProgress = 95;
+      const incrementPerSecond = targetProgress / totalDuration;
+
+      if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
+      progressIntervalRef.current = setInterval(() => {
+        setGenerationTask((prev: any) => {
+          if (!prev || (prev.status !== 'queued' && prev.status !== 'processing')) return prev;
+          const elapsed = (Date.now() - startTime) / 1000;
+          const nextProgress = Math.min(elapsed * incrementPerSecond, targetProgress);
+          const stage = STAGES.find(s => nextProgress <= s.progress)?.label || 'Processando...';
+          return { ...prev, progress: nextProgress, stage };
+        });
+      }, 1000);
+
+      // 2. Prepare images
+      const image_input: string[] = [];
+      const processImageForUpload = async (base64: string) => {
+        const parts = base64.split(';base64,');
+        const contentType = parts[0].split(':')[1];
+        const raw = window.atob(parts[1]);
+        const uInt8Array = new Uint8Array(raw.length);
+        for (let i = 0; i < raw.length; ++i) uInt8Array[i] = raw.charCodeAt(i);
+        const file = new File([new Blob([uInt8Array], { type: contentType })], 'temp.jpg', { type: contentType });
+        return await compressImage(file, 0.9, 2048);
+      };
+
+      if (base64Image) {
+        const compressed = await processImageForUpload(base64Image);
+        const { url } = await uploadTempImage(compressed, auth.currentUser?.uid || 'anonymous');
+        image_input.push(url);
+      }
+      
+      if (mirrorImage) {
+        const compressed = await processImageForUpload(mirrorImage);
+        const { url } = await uploadTempImage(compressed, auth.currentUser?.uid || 'anonymous');
+        image_input.push(url);
       }
 
-      // Convert URLs to proxy URLs if they are Firebase URLs
-      // Proxy URLs handle CORS and expired signed URLs automatically
-      let proxyMainUrl = mainImageUrl;
-      let proxyMirrorUrl = mirrorImageUrl;
-
-      try {
-        if (mainImageUrl.includes('firebasestorage')) {
-          console.log('Converting main image URL to proxy...');
-          proxyMainUrl = getProxyUrl(mainImageUrl);
-          console.log('Main image converted to proxy URL');
-        }
-      } catch (err) {
-        console.warn('Could not convert main image to proxy URL, using original:', err);
-      }
-
-      try {
-        if (mirrorImageUrl && mirrorImageUrl.includes('firebasestorage')) {
-          console.log('Converting mirror image URL to proxy...');
-          proxyMirrorUrl = getProxyUrl(mirrorImageUrl);
-          console.log('Mirror image converted to proxy URL');
-        }
-      } catch (err) {
-        console.warn('Could not convert mirror image to proxy URL, using original:', err);
-      }
-
-      // Prepare image input array (proxy URLs)
-      const image_input = [proxyMainUrl];
-      if (proxyMirrorUrl) {
-        image_input.push(proxyMirrorUrl);
-      }
-
-      // Call generation service with proxy URLs as input
-      const taskId = await kieService.generateImage({
+      // 3. Call KIE API
+      const apiResponse = await kieService.generateImage({
         prompt: activePrompt,
         model: selectedModel,
         resolution: selectedResolution,
         aspect_ratio: selectedAspectRatio,
         image_input
       });
-      
-      setGenerationTask((prev: any) => ({
-        ...prev,
-        taskId,
-        status: 'processing',
-        stage: 'Tarefa criada no servidor'
-      }));
 
-      if (sessionId) {
-        updateDoc(doc(db, 'generation_sessions', sessionId), {
-          userId: auth.currentUser?.uid,
-          taskId,
-          generationStatus: 'processing',
-          updatedAt: new Date().toISOString()
-        }).catch(e => console.warn('Falha ao atualizar sessão no Firestore:', e));
+      let taskId = '';
+      let directUrl = '';
+
+      if (typeof apiResponse === 'string' && apiResponse.startsWith('DIRECT_URL:')) {
+        directUrl = apiResponse.replace('DIRECT_URL:', '');
+        taskId = `direct_${Date.now()}`;
+      } else {
+        taskId = apiResponse;
       }
 
-      // Start polling
-      if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
-      pollingIntervalRef.current = setInterval(async () => {
-        try {
-          const task = await kieService.getTaskStatus(taskId);
+      // 4. Register generation in DB (The "Banco a Banco" start point)
+      const { sessionId } = useStudioStore.getState();
+      const generationDoc: any = {
+        image_generation_id: taskId,
+        user_id: auth.currentUser?.uid,
+        session_id: sessionId || 'temp_session',
+        prompt_content: activePrompt,
+        generation_status: directUrl ? 'completed' : 'processing',
+        progress_percentage: directUrl ? 100 : 5,
+        progress_stage: directUrl ? 'finalizing' : 'initializing',
+        created_at: new Date().toISOString(),
+        is_completed: !!directUrl,
+        image_url_4k: directUrl || null,
+        image_url_preview: directUrl || null
+      };
+      
+      await setDoc(doc(db, 'image_generations', taskId), generationDoc);
+
+      // 5. Start Real-time DB Listening (UI ONLY reacts to DB changes)
+      if (unsubscribeRef.current) unsubscribeRef.current();
+      unsubscribeRef.current = imageGenerationService.subscribeToGeneration(taskId, (data) => {
+        const resultUrl = data.image_url_4k || data.image_url_preview || (Array.isArray(data) ? data[0] : null) || data.resultUrls?.[0];
+        
+        if (data.is_completed || data.generation_status === 'completed' || resultUrl) {
+          if (unsubscribeRef.current) unsubscribeRef.current();
+          if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
+          if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
           
-          if (task.status === 'completed' || task.status === 'success') {
-            if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
-            if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
-
-            let resultUrl = task.works?.[0]?.url || task.result_url;
-
-            // Convert Firebase URL to proxy URL to avoid CORS issues
-            try {
-              resultUrl = getProxyUrl(resultUrl);
-              console.log('[GenerationStep] Converted resultUrl to proxy:', resultUrl);
-            } catch (e) {
-              console.warn('[GenerationStep] Could not convert resultUrl to proxy, using original:', e);
-              // Keep original URL if conversion fails
-            }
-
-            setGenerationTask({
-              taskId,
-              status: 'completed',
-              progress: 100,
-              stage: 'Concluído!',
-              resultUrl
-            });
-            setIsGenerating(false);
-
-            if (sessionId) {
-              updateDoc(doc(db, 'generation_sessions', sessionId), {
-                userId: auth.currentUser?.uid,
-                generationResultUrl: resultUrl,
-                generationStatus: 'completed',
-                completedAt: new Date().toISOString(),
-                updatedAt: new Date().toISOString()
-              }).catch(e => console.warn('Falha ao concluir sessão no Firestore:', e));
-            }
-          } else if (task.status === 'failed' || task.status === 'error') {
-            if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
-            if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
-            setGenerationTask({
-              taskId,
-              status: 'failed',
-              progress: 0,
-              error: task.msg || 'Falha na geração da imagem.'
-            });
-            setIsGenerating(false);
-            await refundCredits(cost, 'generation_failed');
-
-            if (sessionId) {
-              updateDoc(doc(db, 'generation_sessions', sessionId), {
-                userId: auth.currentUser?.uid,
-                generationStatus: 'failed',
-                generationError: task.msg || 'Falha na geração da imagem.',
-                updatedAt: new Date().toISOString()
-              }).catch(e => console.warn('Falha ao reportar erro no Firestore:', e));
-            }
-          }
-        } catch (err: any) {
-          console.error('Polling error:', err);
+          setGenerationTask({
+            taskId,
+            status: 'completed',
+            progress: 100,
+            stage: 'Concluído!',
+            resultUrl
+          });
+          setIsGenerating(false);
+        } else if (data.generation_status === 'failed') {
+          if (unsubscribeRef.current) unsubscribeRef.current();
+          if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
+          if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+          setGenerationTask({
+            taskId,
+            status: 'failed',
+            progress: 0,
+            error: data.error_message || 'Falha na geração.'
+          });
+          setIsGenerating(false);
+          refundCredits(cost, 'generation_failed');
         }
-      }, 5000);
+      });
+
+      // 6. Start HYBRID WORKER (Background Polling that writes to DB)
+      // This is necessary for localhost because webhooks won't reach us.
+      if (!directUrl) {
+        if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = setInterval(async () => {
+          try {
+            const pollResponse = await kieService.checkImageTaskStatus(taskId);
+            const data = pollResponse.data || pollResponse;
+            
+            // Extract completion status or result URLs
+            const isCompleted = data.status === 'completed' || 
+                               data.status === 'success' || 
+                               (Array.isArray(data) && data.length > 0) ||
+                               (data.resultUrls && data.resultUrls.length > 0);
+            
+            const isFailed = data.status === 'failed' || data.status === 'error';
+
+            if (isCompleted) {
+              const resultUrl = (Array.isArray(data) ? data[0] : null) || 
+                                data.resultUrls?.[0] || 
+                                data.works?.[0]?.url || 
+                                data.result_url;
+              
+              // WORKER WRITES TO DB (UI will catch this via onSnapshot)
+              await imageGenerationService.completeWithUrl(taskId, resultUrl);
+              if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+            } else if (isFailed) {
+              await imageGenerationService.fail(taskId, data.msg || 'API Error');
+              if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+            }
+          } catch (err) {
+            console.error('Hybrid Worker Error:', err);
+          }
+        }, 5000);
+      }
 
     } catch (err: any) {
-      console.error(err);
+      console.error('Generation Error:', err);
       if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
       setGenerationTask({
         taskId: 'error',
         status: 'failed',
         progress: 0,
-        error: err.message || 'Erro ao iniciar geração.'
+        error: err.message || 'Erro inesperado.'
       });
       setIsGenerating(false);
-      await refundCredits(cost, 'generation_init_failed');
     }
   };
 
@@ -313,66 +316,45 @@ const GenerationStep: React.FC = () => {
         <div className="grid lg:grid-cols-3 gap-8">
           <div className="lg:col-span-2 space-y-8">
             {/* Model Selection */}
-            <div className="bg-white dark:bg-neutral-900 p-8 rounded-3xl border border-neutral-200 dark:border-neutral-800 shadow-sm space-y-6">
-              <div className="flex items-center gap-3">
+            <div className="bg-white dark:bg-neutral-900 rounded-[2rem] p-8 shadow-sm border border-neutral-100 dark:border-neutral-800">
+              <div className="flex items-center gap-3 mb-6">
                 <div className="w-10 h-10 bg-primary/10 rounded-xl flex items-center justify-center text-primary">
                   <Zap size={20} />
                 </div>
-                <h3 className="text-lg font-bold">Escolha o Modelo</h3>
+                <div>
+                  <h2 className="text-xl font-bold">Modelo de IA</h2>
+                  <p className="text-sm text-neutral-500">Escolha a versão do Nano Banana para a renderização</p>
+                </div>
               </div>
-              
-              <div className="grid grid-cols-2 gap-4">
-                <button
-                  onClick={() => setSelectedModel('nano-banana-2')}
-                  className={`p-6 rounded-2xl border-2 text-left transition-all ${
-                    selectedModel === 'nano-banana-2'
-                      ? "border-primary bg-primary/5 ring-4 ring-primary/10"
-                      : "border-neutral-100 dark:border-neutral-800 hover:border-neutral-200"
-                  }`}
-                >
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="font-bold">Nano Banana 2</span>
-                    {selectedModel === 'nano-banana-2' && <CheckCircle2 size={18} className="text-primary" />}
-                  </div>
-                  <p className="text-xs text-neutral-500 leading-relaxed">
-                    Equilíbrio perfeito entre velocidade e qualidade. Ideal para prévias e iterações rápidas.
-                  </p>
-                </button>
 
-                <button
-                  onClick={() => setSelectedModel('nano-banana-pro')}
-                  className={`p-6 rounded-2xl border-2 text-left transition-all ${
-                    selectedModel === 'nano-banana-pro'
-                      ? "border-primary bg-primary/5 ring-4 ring-primary/10"
-                      : "border-neutral-100 dark:border-neutral-800 hover:border-neutral-200"
-                  }`}
-                >
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2">
-                      <span className="font-bold">Nano Banana Pro</span>
-                      <Crown size={14} className="text-amber-500" />
+              <div className="grid md:grid-cols-2 gap-4">
+                {MODELS.map(model => (
+                  <button
+                    key={model.id}
+                    onClick={() => setSelectedModel(model.id as any)}
+                    className={`text-left p-4 rounded-2xl border-2 transition-all ${
+                      selectedModel === model.id 
+                        ? 'border-primary bg-primary/5' 
+                        : 'border-neutral-100 dark:border-neutral-800 hover:border-neutral-200 dark:hover:border-neutral-700'
+                    }`}
+                  >
+                    <div className="font-bold flex items-center justify-between">
+                      {model.label}
+                      {model.id === 'nano-banana-pro' && <Crown size={16} className="text-yellow-500" />}
                     </div>
-                    {selectedModel === 'nano-banana-pro' && <CheckCircle2 size={18} className="text-primary" />}
-                  </div>
-                  <p className="text-xs text-neutral-500 leading-relaxed">
-                    Máxima fidelidade e realismo. Recomendado para entregas finais e portfólio.
-                  </p>
-                </button>
+                    <div className="text-xs text-neutral-500 mt-1">{model.description}</div>
+                  </button>
+                ))}
               </div>
             </div>
 
             {/* Prompt Preview */}
-            <div className="bg-white dark:bg-neutral-900 p-8 rounded-3xl border border-neutral-200 dark:border-neutral-800 shadow-sm space-y-6">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-indigo-500/10 rounded-xl flex items-center justify-center text-indigo-500">
-                    <Layout size={20} />
-                  </div>
-                  <h3 className="text-lg font-bold">Prompt de Geração</h3>
+            <div className="bg-white dark:bg-neutral-900 rounded-[2rem] p-8 shadow-sm border border-neutral-100 dark:border-neutral-800">
+              <div className="flex items-center gap-3 mb-6">
+                <div className="w-10 h-10 bg-indigo-500/10 rounded-xl flex items-center justify-center text-indigo-500">
+                  <Layout size={20} />
                 </div>
-                <span className="text-[10px] font-bold text-neutral-400 uppercase tracking-widest">
-                  {getActivePrompt()?.length || 0} caracteres
-                </span>
+                <h2 className="text-xl font-bold">Prompt de Geração</h2>
               </div>
               
               <div className="p-4 bg-neutral-50 dark:bg-neutral-900/50 rounded-2xl border border-neutral-100 dark:border-neutral-800">
@@ -382,177 +364,55 @@ const GenerationStep: React.FC = () => {
               </div>
             </div>
 
-            {/* Image References / Manual Attachment */}
-            <div className="bg-white dark:bg-neutral-900 p-8 rounded-3xl border border-neutral-200 dark:border-neutral-800 shadow-sm space-y-8">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-emerald-500/10 rounded-xl flex items-center justify-center text-emerald-500">
-                    <ImageIcon size={20} />
-                  </div>
-                  <div>
-                    <h3 className="text-lg font-bold">Imagens de Referência</h3>
-                    <p className="text-xs text-neutral-500">O modelo usará estas imagens como base para a geração.</p>
-                  </div>
+            {/* Image References */}
+            <div className="bg-white dark:bg-neutral-900 rounded-[2rem] p-8 shadow-sm border border-neutral-100 dark:border-neutral-800">
+              <div className="flex items-center gap-3 mb-6">
+                <div className="w-10 h-10 bg-emerald-500/10 rounded-xl flex items-center justify-center text-emerald-500">
+                  <ImageIcon size={20} />
                 </div>
+                <h2 className="text-xl font-bold">Imagens de Referência</h2>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                {/* Main Image Card (Manual Attachment Required) */}
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-black text-neutral-400 uppercase tracking-widest">Imagem Principal</span>
-                    <div className="px-2 py-0.5 bg-emerald-500/10 text-emerald-500 rounded text-[10px] font-bold">OBRIGATÓRIO</div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                {/* Original Image */}
+                <div className="space-y-2">
+                  <div className="aspect-square rounded-2xl border border-neutral-200 dark:border-neutral-800 overflow-hidden bg-neutral-100 dark:bg-neutral-900">
+                    {base64Image ? (
+                      <img src={base64Image} className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-neutral-300">
+                        <ImageIcon size={24} />
+                      </div>
+                    )}
                   </div>
-
-                  {base64Image ? (
-                    <div className="aspect-video rounded-2xl border border-emerald-500/30 overflow-hidden bg-neutral-50 dark:bg-neutral-900/50 group relative">
-                      <img src={base64Image} className="w-full h-full object-contain" alt="Main Architecture" />
-                      {!mainImageUrl && (
-                        <div className="absolute inset-0 bg-black/40 flex flex-col items-center justify-center gap-2">
-                           <Loader2 className="animate-spin text-white" size={24} />
-                           <span className="text-[10px] text-white font-bold">FINALIZANDO UPLOAD...</span>
-                        </div>
-                      )}
-                      <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-3">
-                        <button 
-                          onClick={() => { setBase64Image(null); setMainImageUrl(null); }}
-                          className="px-4 py-2 bg-error text-white rounded-xl text-xs font-bold hover:scale-105 transition-transform"
-                        >
-                          Remover
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <label className={`aspect-video rounded-2xl border-2 border-dashed border-emerald-200 dark:border-neutral-800 hover:border-emerald-500/50 transition-colors cursor-pointer flex flex-col items-center justify-center gap-3 bg-emerald-50/10 dark:bg-emerald-900/10 ${isUploadingMain ? 'pointer-events-none opacity-50' : ''}`}>
-                      <div className="w-12 h-12 rounded-full bg-emerald-500/20 flex items-center justify-center text-emerald-600">
-                        {isUploadingMain ? <Loader2 className="animate-spin" size={24} /> : <Upload size={24} />}
-                      </div>
-                      <div className="text-center">
-                        <p className="text-sm font-bold text-emerald-700 dark:text-emerald-400">
-                          {isUploadingMain ? 'Processando...' : 'Anexar Imagem Principal'}
-                        </p>
-                        <p className="text-[10px] text-neutral-500 mt-1">Este passo garante a integridade do envio</p>
-                      </div>
-                      <input 
-                        type="file" 
-                        accept="image/*" 
-                        className="hidden" 
-                        onChange={async (e) => {
-                          const file = e.target.files?.[0];
-                          if (file) {
-                            try {
-                              setIsUploadingMain(true);
-                              const compressed = await compressImage(file, 0.95, 1024);
-                              const reader = new FileReader();
-                              reader.onloadend = async () => {
-                                const b64 = reader.result as string;
-                                setBase64Image(b64);
-                                try {
-                                  const url = await uploadBase64ViaProxy(b64, 'main_generation');
-                                  setMainImageUrl(url);
-                                } catch (err) {
-                                  toast.error('Erro no upload para o servidor');
-                                  setBase64Image(null);
-                                } finally {
-                                  setIsUploadingMain(false);
-                                }
-                              };
-                              reader.readAsDataURL(compressed);
-                            } catch (err) {
-                              console.error('Falha ao processar imagem principal:', err);
-                              setIsUploadingMain(false);
-                            }
-                          }
-                        }}
-                      />
-                    </label>
-                  )}
+                  <p className="text-[10px] font-bold text-center text-neutral-400 uppercase">Original</p>
                 </div>
 
-                {/* Mirror/Reference Image Card */}
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-black text-neutral-400 uppercase tracking-widest">Referência / Espelho</span>
-                    <div className="px-2 py-0.5 bg-indigo-500/10 text-indigo-500 rounded text-[10px] font-bold uppercase">Manual</div>
-                  </div>
-                  
-                  {mirrorImage ? (
-                    <div className="aspect-video rounded-2xl border border-primary/30 overflow-hidden bg-neutral-50 dark:bg-neutral-900/50 group relative">
-                      <img src={mirrorImage} className="w-full h-full object-contain" alt="Mirror Reference" />
-                      {!mirrorImageUrl && (
-                        <div className="absolute inset-0 bg-black/40 flex flex-col items-center justify-center gap-2">
-                           <Loader2 className="animate-spin text-white" size={24} />
-                           <span className="text-[10px] text-white font-bold">FINALIZANDO UPLOAD...</span>
+                {/* Mirror Image */}
+                {hasMirror && (
+                  <div className="space-y-2">
+                    <div className="aspect-square rounded-2xl border border-neutral-200 dark:border-neutral-800 overflow-hidden bg-neutral-100 dark:bg-neutral-900 relative group">
+                      {mirrorImage ? (
+                        <img src={mirrorImage} className="w-full h-full object-cover" />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-neutral-300">
+                          <Eye size={24} />
                         </div>
                       )}
-                      <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-3">
-                        <button 
-                          onClick={() => { setMirrorImage(null); setMirrorImageUrl(null); }}
-                          className="px-4 py-2 bg-error text-white rounded-xl text-xs font-bold hover:scale-105 transition-transform"
-                        >
-                          Remover
-                        </button>
-                      </div>
                     </div>
-                  ) : (
-                    <label className={`aspect-video rounded-2xl border-2 border-dashed border-neutral-200 dark:border-neutral-800 hover:border-primary/50 transition-colors cursor-pointer flex flex-col items-center justify-center gap-3 bg-neutral-50/50 dark:bg-neutral-900/30 ${isUploadingMirror ? 'pointer-events-none opacity-50' : ''}`}>
-                      <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center text-primary">
-                        {isUploadingMirror ? <Loader2 className="animate-spin" size={24} /> : <Maximize2 size={24} />}
-                      </div>
-                      <div className="text-center">
-                        <p className="text-sm font-bold">{isUploadingMirror ? 'Processando...' : 'Anexar Complemento'}</p>
-                        <p className="text-[10px] text-neutral-500 mt-1">Clique ou arraste um arquivo</p>
-                      </div>
-                      <input 
-                        type="file" 
-                        accept="image/*" 
-                        className="hidden" 
-                        onChange={async (e) => {
-                          const file = e.target.files?.[0];
-                          if (file) {
-                            try {
-                              setIsUploadingMirror(true);
-                              const compressed = await compressImage(file, 0.9, 1024);
-                              const reader = new FileReader();
-                              reader.onloadend = async () => {
-                                const b64 = reader.result as string;
-                                setMirrorImage(b64);
-                                try {
-                                  const url = await uploadBase64ViaProxy(b64, 'mirror_reference');
-                                  setMirrorImageUrl(url);
-                                } catch (err) {
-                                  toast.error('Erro no upload para o servidor');
-                                  setMirrorImage(null);
-                                } finally {
-                                  setIsUploadingMirror(false);
-                                }
-                              };
-                              reader.readAsDataURL(compressed);
-                            } catch (err) {
-                              console.error('Falha ao processar anexo manual:', err);
-                              setIsUploadingMirror(false);
-                            }
-                          }
-                        }}
-                      />
-                    </label>
-                  )}
-                  <p className="text-[10px] text-neutral-400 italic">
-                    {hasMirror 
-                      ? "* Sistema detectou necessidade de reflexo. Recomendamos um anexo." 
-                      : "* Opcional: Use para referenciar reflexos ou variações."}
-                  </p>
-                </div>
+                    <p className="text-[10px] font-bold text-center text-neutral-400 uppercase">Espelho</p>
+                  </div>
+                )}
               </div>
             </div>
 
             {/* Technical Config Summary */}
-            <div className="bg-white dark:bg-neutral-900 p-8 rounded-3xl border border-neutral-200 dark:border-neutral-800 shadow-sm space-y-6">
-              <div className="flex items-center gap-3">
+            <div className="bg-white dark:bg-neutral-900 rounded-[2rem] p-8 shadow-sm border border-neutral-100 dark:border-neutral-800">
+              <div className="flex items-center gap-3 mb-6">
                 <div className="w-10 h-10 bg-amber-500/10 rounded-xl flex items-center justify-center text-amber-500">
                   <RefreshCw size={20} />
                 </div>
-                <h3 className="text-lg font-bold">Configurações Técnicas Aplicadas</h3>
+                <h2 className="text-xl font-bold">Configurações Técnicas Aplicadas</h2>
               </div>
 
               <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
@@ -587,9 +447,57 @@ const GenerationStep: React.FC = () => {
               </p>
             </div>
 
+            {/* Mirror Image Upload (Conditional) */}
+            {hasMirror && (
+              <div className="bg-white dark:bg-neutral-900 rounded-[2rem] p-8 shadow-sm border border-neutral-100 dark:border-neutral-800">
+                <div className="flex items-center gap-3 mb-6">
+                  <div className="w-10 h-10 bg-amber-500/10 rounded-xl flex items-center justify-center text-amber-500">
+                    <Eye size={20} />
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-bold">Imagem do Espelho</h2>
+                    <p className="text-xs text-neutral-500">Detectamos um espelho. Para melhor realismo, envie o que ele deve refletir.</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-6">
+                  <div className="w-32 h-32 rounded-2xl border-2 border-dashed border-neutral-200 dark:border-neutral-800 flex items-center justify-center overflow-hidden bg-neutral-50 dark:bg-neutral-900/50">
+                    {mirrorImage ? (
+                      <img src={mirrorImage} className="w-full h-full object-cover" />
+                    ) : (
+                      <ImageIcon size={32} className="text-neutral-300" />
+                    )}
+                  </div>
+                  <div className="flex-1 space-y-3">
+                    <label className="block">
+                      <span className="sr-only">Escolher imagem do espelho</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            const reader = new FileReader();
+                            reader.onloadend = () => {
+                              setMirrorImage(reader.result as string);
+                            };
+                            reader.readAsDataURL(file);
+                          }
+                        }}
+                        className="block w-full text-sm text-neutral-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-primary/10 file:text-primary hover:file:bg-primary/20"
+                      />
+                    </label>
+                    <p className="text-[10px] text-neutral-400 leading-relaxed">
+                      Envie uma foto do ambiente oposto ao espelho ou uma imagem de referência para o reflexo.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Resolution & Aspect Ratio */}
             <div className="grid md:grid-cols-2 gap-8">
-              <div className="bg-white dark:bg-neutral-900 p-8 rounded-3xl border border-neutral-200 dark:border-neutral-800 shadow-sm space-y-6">
+              <div className="bg-white dark:bg-neutral-900 rounded-[2rem] p-8 shadow-sm border border-neutral-100 dark:border-neutral-800">
                 <h3 className="text-sm font-bold text-neutral-400 uppercase tracking-widest">Resolução de Saída</h3>
                 <div className="space-y-3">
                   {RESOLUTIONS.map((res) => (
@@ -616,7 +524,7 @@ const GenerationStep: React.FC = () => {
                 </div>
               </div>
 
-              <div className="bg-white dark:bg-neutral-900 p-8 rounded-3xl border border-neutral-200 dark:border-neutral-800 shadow-sm space-y-6">
+              <div className="bg-white dark:bg-neutral-900 rounded-[2rem] p-8 shadow-sm border border-neutral-100 dark:border-neutral-800">
                 <h3 className="text-sm font-bold text-neutral-400 uppercase tracking-widest">Formato (Aspect Ratio)</h3>
                 <div className="grid grid-cols-4 gap-2">
                   {ASPECT_RATIOS.map((ratio) => {
@@ -790,8 +698,7 @@ const GenerationStep: React.FC = () => {
                     strokeWidth="12"
                     fill="transparent"
                     strokeDasharray={565}
-                    initial={{ strokeDashoffset: 565 }}
-                    animate={{ strokeDashoffset: 565 - (565 * (generationTask?.progress || 0)) / 100 }}
+                    animate={{ strokeDashoffset: 565 - (565 * (generationTask?.progress ?? 0)) / 100 }}
                     className="text-primary"
                     transition={{ duration: 0.5 }}
                   />
@@ -802,7 +709,7 @@ const GenerationStep: React.FC = () => {
                   {generationTask?.startTime && (
                     <div className="flex items-center gap-1 mt-2 text-neutral-500 font-mono text-xs">
                       <Clock size={12} />
-                      <span>{Math.floor((Date.now() - (generationTask.startTime)) / 1000)}s / 240s</span>
+                      <span>{Math.floor((Date.now() - generationTask.startTime) / 1000)}s / 240s</span>
                     </div>
                   )}
                 </div>
@@ -815,13 +722,13 @@ const GenerationStep: React.FC = () => {
                 </p>
                 <div className="inline-flex items-center gap-2 px-4 py-2 bg-primary/5 text-primary rounded-full text-sm font-bold">
                   <Loader2 className="animate-spin" size={16} />
-                  Estágio: {generationTask.stage}
+                  Estágio: {generationTask?.stage || 'Processando...'}
                 </div>
               </div>
 
               <div className="flex justify-center gap-4">
                 <button
-                  disabled={generationTask.progress < 50}
+                  disabled={(generationTask?.progress || 0) < 50}
                   onClick={() => setShowPreview(true)}
                   className="flex items-center gap-2 px-8 py-4 bg-white dark:bg-neutral-800 border-2 border-neutral-100 dark:border-neutral-700 rounded-2xl font-bold hover:border-primary transition-all disabled:opacity-30"
                 >
@@ -833,7 +740,7 @@ const GenerationStep: React.FC = () => {
               <div className="w-full max-w-lg mx-auto h-2 bg-neutral-100 dark:bg-neutral-800 rounded-full overflow-hidden">
                 <motion.div 
                   className="h-full bg-primary"
-                  animate={{ width: `${generationTask.progress}%` }}
+                  animate={{ width: `${generationTask?.progress || 0}%` }}
                 />
               </div>
             </div>
@@ -849,7 +756,6 @@ const GenerationStep: React.FC = () => {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={() => setShowPreview(false)}
               className="absolute inset-0 bg-black/90 backdrop-blur-md"
             />
             <motion.div

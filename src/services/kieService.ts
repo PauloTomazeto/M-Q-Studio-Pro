@@ -411,7 +411,25 @@ Generate a complete ScanResult JSON object with 100% technical accuracy across 8
 - USE "none" OR 0 FOR UNKNOWN VALUES.
 
 [SCHEMA REFERENCE]
-${JSON.stringify(ScanResultSchema.shape, null, 2)}`;
+{
+  "isFloorPlan": boolean,
+  "typology": "PLANTA_BAIXA" | "PERSPECTIVA" | "FACHADA" | "CORTE" | "ELEVAÇÃO" | "DETALHE" | "3D_MOCK",
+  "plantaType"?: "A" | "B" | "C" | "D",
+  "ambientes"?: AmbienteSchema[],
+  "orientation"?: { norte?, escala?, dimensoes_referencia?, proporcao_lote? },
+  "floors"?: integer,
+  "volumes"?: VolumeSchema[],
+  "materials": MaterialSchema[],
+  "style_code"?: "contemp" | "minimalista" | "colonial" | "industrial" | "brutalista" | "misto",
+  "context_20m"?: { topografia, vegetation_pct, species_visiveis[], piso_externo, veiculos, infraestrutura_urbana[], vizinhos },
+  "openings"?: OpeningSchema[],
+  "structural_highlights"?: StructuralHighlightSchema[],
+  "cameraData"?: { height_m?, distance_m?, focal_apparent?, pitch?, yaw?, roll?, vanishing_points?, camera_preset?, ... },
+  "light": AmbientLightSchema,
+  "lightPoints": LightPointSchema[],
+  "structural_integrity"?: { junction_analysis?, boundary_preservation?, artifact_prevention_notes? },
+  "confidence": { materials?, camera?, light?, context?, general?, composition?, lighting_quality?, photorealism?, technical_accuracy? }
+}`;
 
 const parseJsonResponse = (content: string) => {
   if (typeof content !== 'string') return content;
@@ -493,6 +511,63 @@ const extractContent = (data: any): string => {
   return '';
 };
 
+/**
+ * Normalize diagnosis response from AI
+ * Handles cases where fields come as strings instead of structured objects
+ * Example: pbr_diffuse: "matte white" → pbr_diffuse: { description: "matte white", color_hex: "#ffffff", ... }
+ */
+const normalizeDiagnosisResponse = (data: any): any => {
+  if (!data || typeof data !== 'object') return data;
+
+  const normalized = { ...data };
+
+  // Normalize materials array
+  if (normalized.materials && Array.isArray(normalized.materials)) {
+    normalized.materials = normalized.materials.map((material: any) => {
+      if (!material || typeof material !== 'object') return material;
+
+      const normalizedMaterial = { ...material };
+
+      // Normalize pbr_diffuse if it's a string
+      if (typeof normalizedMaterial.pbr_diffuse === 'string') {
+        console.log('[Normalization] Converting pbr_diffuse string to object:', normalizedMaterial.pbr_diffuse);
+        normalizedMaterial.pbr_diffuse = {
+          description: normalizedMaterial.pbr_diffuse,
+          color_hex: '#cccccc', // Default gray
+          color_rgb: { r: 204, g: 204, b: 204 },
+          saturation: 50,
+          brightness: 50,
+          texture_type: 'smooth',
+          texture_scale: 'medium'
+        };
+      } else if (normalizedMaterial.pbr_diffuse && typeof normalizedMaterial.pbr_diffuse === 'object') {
+        // Fill missing fields in pbr_diffuse object with defaults
+        normalizedMaterial.pbr_diffuse = {
+          description: normalizedMaterial.pbr_diffuse.description || 'Unspecified material',
+          color_hex: normalizedMaterial.pbr_diffuse.color_hex || '#cccccc',
+          color_rgb: normalizedMaterial.pbr_diffuse.color_rgb || { r: 204, g: 204, b: 204 },
+          saturation: normalizedMaterial.pbr_diffuse.saturation ?? 50,
+          brightness: normalizedMaterial.pbr_diffuse.brightness ?? 50,
+          texture_type: normalizedMaterial.pbr_diffuse.texture_type || 'smooth',
+          texture_scale: normalizedMaterial.pbr_diffuse.texture_scale || 'medium'
+        };
+      }
+
+      // Similarly normalize other PBR properties if needed
+      ['pbr_reflection', 'pbr_glossiness', 'pbr_bump', 'pbr_light_behavior'].forEach(pbrField => {
+        if (typeof normalizedMaterial[pbrField] === 'string') {
+          console.log(`[Normalization] Converting ${pbrField} string to empty object`);
+          normalizedMaterial[pbrField] = {};
+        }
+      });
+
+      return normalizedMaterial;
+    });
+  }
+
+  return normalized;
+};
+
 export const kieService = {
   async diagnoseImage(imageBase64: string, sessionId: string): Promise<ScanResult> {
     await usageService.logUsage('scan', { metadata: { sessionId } });
@@ -501,35 +576,58 @@ export const kieService = {
 
     console.log('Starting diagnosis for session:', sessionId);
     const startTime = Date.now();
-    
-    // Extract raw base64 data
-    let base64Data = imageBase64;
-    let mimeType = 'image/jpeg';
-    if (base64Data.startsWith('data:')) {
-      const parts = base64Data.split(',');
-      mimeType = parts[0].match(/:(.*?);/)?.[1] || 'image/jpeg';
-      base64Data = parts[1];
-    }
 
     try {
       console.log('Calling KIE Gemini API for diagnosis...');
+      // Gemini API accepts data URIs directly, no need to extract base64 or MIME type
       const response = await axios.post('/api/kie/gemini-2.5-pro/v1/chat/completions', {
         model: 'gemini-2.5-pro',
         messages: [
           { role: 'system', content: SYSTEM_INSTRUCTION },
-          { 
-            role: 'user', 
+          {
+            role: 'user',
             content: [
               { type: 'text', text: 'Perform a full architectural diagnosis of this image. Return ONLY the JSON object.' },
-              { 
-                type: 'image_url', 
-                image_url: { url: imageBase64 } 
+              {
+                type: 'image_url',
+                image_url: { url: imageBase64 }
               }
             ]
           }
         ],
         temperature: 0.7,
-        response_format: { type: 'json_object' }
+        response_format: {
+          type: 'json_schema',
+          json_schema: {
+            name: 'structured_output',
+            strict: true,
+            schema: {
+              type: 'object',
+              title: 'Architectural Scan Result',
+              description: 'Complete architectural analysis with materials, camera data, lighting, and structural information',
+              properties: {
+                isFloorPlan: { type: 'boolean' },
+                typology: { type: 'string' },
+                plantaType: { type: 'string' },
+                ambientes: { type: 'array' },
+                orientation: { type: 'object' },
+                floors: { type: 'number' },
+                volumes: { type: 'array' },
+                materials: { type: 'array' },
+                style_code: { type: 'string' },
+                context_20m: { type: 'object' },
+                openings: { type: 'array' },
+                structural_highlights: { type: 'array' },
+                cameraData: { type: 'object' },
+                light: { type: 'object' },
+                lightPoints: { type: 'array' },
+                structural_integrity: { type: 'object' },
+                confidence: { type: 'object' }
+              },
+              required: ['isFloorPlan', 'typology', 'materials', 'light', 'lightPoints', 'confidence']
+            }
+          }
+        }
       });
 
       const content = extractContent(response.data);
@@ -541,9 +639,13 @@ export const kieService = {
       console.log('AI Response Content Length:', content.length);
       const rawJson = parseJsonResponse(content);
       
+      // 2.5 Normalize diagnosis response (IA may return strings instead of objects)
+      console.log('Normalizing AI response structure...');
+      const normalizedJson = normalizeDiagnosisResponse(rawJson);
+      
       // 3. Validate with Zod
       console.log('Validating AI response with Zod...');
-      const validatedData = ScanResultSchema.parse(rawJson);
+      const validatedData = ScanResultSchema.parse(normalizedJson);
       
       const durationMs = Date.now() - startTime;
       console.log(`Diagnosis completed in ${durationMs}ms`);
@@ -583,28 +685,66 @@ export const kieService = {
   },
 
   async detectArchitecture(imageBase64: string) {
-    await usageService.logUsage('read');
-    
-    const response = await axios.post('/api/kie/gemini-2.5-pro/v1/chat/completions', {
-      model: 'gemini-2.5-pro',
-      messages: [
-        { 
-          role: 'user', 
-          content: [
-            { type: 'text', text: 'You are an architectural and interior design expert. Your task is to determine if an image represents an architectural or interior design subject (building, interior room, floor plan, facade, furniture, cabinetry, built-in shelves, etc.). Respond ONLY with a JSON object: {"isArchitecture": boolean, "confidence": number, "reason": string}' },
-            { 
-              type: 'image_url', 
-              image_url: { url: imageBase64 } 
+    const startTime = Date.now();
+    try {
+      console.log('[DetectArchitecture] START - image size:', imageBase64.length);
+      await usageService.logUsage('read');
+      console.log('[DetectArchitecture] Usage logged');
+
+      const payload = {
+        model: 'gemini-2.5-pro',
+        messages: [
+          { 
+            role: 'user', 
+            content: [
+              { type: 'text', text: 'You are an architectural and interior design expert. Your task is to determine if an image represents an architectural or interior design subject (building, interior room, floor plan, facade, furniture, cabinetry, built-in shelves, etc.). Respond ONLY with a JSON object: {"isArchitecture": boolean, "confidence": number, "reason": string}' },
+              { 
+                type: 'image_url', 
+                image_url: { url: imageBase64 } 
+              }
+            ]
+          }
+        ],
+        temperature: 0.1,
+        response_format: {
+          type: 'json_schema',
+          json_schema: {
+            name: 'structured_output',
+            strict: true,
+            schema: {
+              type: 'object',
+              title: 'Architecture Detection Result',
+              description: 'Determines if an image represents an architectural or interior design subject',
+              properties: {
+                isArchitecture: { type: 'boolean' },
+                confidence: { type: 'number' },
+                reason: { type: 'string' }
+              },
+              required: ['isArchitecture', 'confidence', 'reason']
             }
-          ]
+          }
         }
-      ],
-      temperature: 0.1,
-      response_format: { type: 'json_object' }
-    });
-    
-    const content = extractContent(response.data);
-    return parseJsonResponse(content);
+      };
+      
+      console.log('[DetectArchitecture] Sending request to KIE API...');
+      const response = await axios.post('/api/kie/gemini-2.5-pro/v1/chat/completions', payload, {
+        timeout: 120000 // 120s timeout for this specific call
+      });
+
+      console.log('[DetectArchitecture] Response received:', response.status);
+      const content = extractContent(response.data);
+      const result = parseJsonResponse(content);
+      console.log('[DetectArchitecture] SUCCESS in', Date.now() - startTime, 'ms:', result);
+      return result;
+    } catch (err: any) {
+      console.error('[DetectArchitecture] ERROR after', Date.now() - startTime, 'ms:', err.message);
+      console.error('[DetectArchitecture] Error details:', {
+        code: err.code,
+        status: err.response?.status,
+        statusText: err.response?.statusText
+      });
+      throw err;
+    }
   },
 
   async generatePrompt(scanResult: any, configParams: any, mode: 'single' | 'blocks') {
@@ -847,7 +987,33 @@ Formato de saída: ${mode === 'single' ? 'Texto plano com JSON de análise ao fi
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userMessage }
         ],
-        temperature: 0.7
+        temperature: 0.7,
+        response_format: {
+          type: 'json_schema',
+          json_schema: {
+            name: 'structured_output',
+            strict: true,
+            schema: {
+              type: 'object',
+              title: 'Architectural Prompt with Blocks',
+              description: 'Generated architectural prompt with blocks and quality analysis',
+              properties: {
+                blocks: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      type: { type: 'string' },
+                      content: { type: 'string' }
+                    }
+                  }
+                },
+                overall_quality_score: { type: 'number' },
+                quality_breakdown: { type: 'object' }
+              }
+            }
+          }
+        }
       });
 
       const content = extractContent(response.data);
@@ -888,7 +1054,7 @@ Formato de saída: ${mode === 'single' ? 'Texto plano com JSON de análise ao fi
   async generateImage(params: {
     prompt: string;
     model: 'nano-banana-2' | 'nano-banana-pro';
-    resolution: '1K' | '2K' | '3K';
+    resolution: '1K' | '2K' | '2.5K' | '3K' | '4K';
     aspect_ratio: string;
     image_input?: string[];
     sessionId: string;
@@ -1075,7 +1241,39 @@ Formato de saída: ${mode === 'single' ? 'Texto plano com JSON de análise ao fi
         }
       ],
       temperature: 0.7,
-      response_format: { type: 'json_object' }
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'structured_output',
+          strict: true,
+          schema: {
+            type: 'object',
+            title: 'Material Properties',
+            description: 'Physical and PBR properties of a material extracted from image analysis',
+            properties: {
+              id: { type: 'string' },
+              elemento: { type: 'string' },
+              location_description: { type: 'string' },
+              location_reference: { type: 'string' },
+              acabamento: { type: 'string' },
+              reflectancia: { type: 'string' },
+              pbr_diffuse: { type: 'object' },
+              pbr_reflection: { type: 'object' },
+              pbr_glossiness: { type: 'object' },
+              pbr_bump: { type: 'object' },
+              pbr_light_behavior: { type: 'object' },
+              adjacent_materials: { type: 'array' },
+              interaction_with_light: { type: 'string' },
+              confidence: { type: 'number' },
+              confidence_factors: { type: 'array' },
+              visibility: { type: 'number' },
+              is_dominant: { type: 'boolean' },
+              material_category: { type: 'string' }
+            },
+            required: ['id', 'elemento', 'acabamento']
+          }
+        }
+      }
     });
 
     const content = extractContent(response.data);
