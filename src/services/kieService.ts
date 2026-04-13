@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { z } from 'zod';
+import { v4 as uuidv4 } from 'uuid';
 import { db, auth } from '../firebase';
 import { usageService } from './usageService';
 import { 
@@ -362,11 +363,15 @@ Generate a complete ScanResult JSON object with 100% technical accuracy across 8
     - artifact_prevention_notes: Specific warnings for the prompt generator (e.g., "Do not add concrete pillars at the wood wall corner").
 
 [TOOL-MAT: MATERIAL ANALYSIS (PBR)]
-- For each element (wall, floor, ceiling, furniture, etc.), identify:
+- For each element (wall, floor, ceiling, furniture, etc.), return SEPARATE objects for each PBR property (NOT a single pbr_properties string):
   - Elemento and Acabamento (technical description in Brazilian Portuguese).
   - Location_reference: A short reference of where the material was found in the image (e.g., "Parede ao fundo", "Piso central", "Móvel à esquerda").
   - Reflectancia: matte, semi-matte, semi-gloss, gloss, espelhado.
-  - PBR Properties: diffuse (color/texture), reflection (0-1), glossiness (0-1), bump (micro-relief), light_behavior.
+  - pbr_diffuse: { description, color_hex, color_rgb: { r, g, b }, saturation, brightness, texture_type, texture_scale }
+  - pbr_reflection: { intensity, fresnel_at_0, fresnel_at_90 }
+  - pbr_glossiness: { value, microfacet_distribution }
+  - pbr_bump: { intensity, normal_map_type }
+  - pbr_light_behavior: description of how the material interacts with light
 - Use technical terms like "carvalho escovado", "travertino polido", "alumínio anodizado".
 
 [TOOL-CAMERA: PHOTOGRAPHIC PARAMETERS]
@@ -513,20 +518,75 @@ const extractContent = (data: any): string => {
 
 /**
  * Normalize diagnosis response from AI
- * Handles cases where fields come as strings instead of structured objects
- * Example: pbr_diffuse: "matte white" → pbr_diffuse: { description: "matte white", color_hex: "#ffffff", ... }
+ * Handles:
+ * - Missing id fields (generates UUIDs)
+ * - color_rgb strings parsed to objects (e.g., "255, 250, 241" → { r: 255, g: 250, b: 241 })
+ * - Missing location_description fields
+ * - PBR fields that arrive as strings instead of objects
  */
 const normalizeDiagnosisResponse = (data: any): any => {
   if (!data || typeof data !== 'object') return data;
 
   const normalized = { ...data };
 
+  // Helper to parse color_rgb from string format
+  const parseColorRgb = (colorRgb: any): { r: number; g: number; b: number } | undefined => {
+    if (!colorRgb) return undefined;
+    if (typeof colorRgb === 'object' && colorRgb.r !== undefined) return colorRgb;
+    if (typeof colorRgb === 'string') {
+      const match = colorRgb.match(/(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+      if (match) {
+        return { r: parseInt(match[1]), g: parseInt(match[2]), b: parseInt(match[3]) };
+      }
+    }
+    return undefined;
+  };
+
+  // Normalize volumes array
+  if (normalized.volumes && Array.isArray(normalized.volumes)) {
+    normalized.volumes = normalized.volumes.map((volume: any, idx: number) => {
+      if (!volume || typeof volume !== 'object') return volume;
+      const normalizedVolume = { ...volume };
+      if (!normalizedVolume.id) {
+        console.log(`[Normalization] Generating missing id for volume ${idx}`);
+        normalizedVolume.id = uuidv4();
+      }
+      return normalizedVolume;
+    });
+  }
+
   // Normalize materials array
   if (normalized.materials && Array.isArray(normalized.materials)) {
-    normalized.materials = normalized.materials.map((material: any) => {
+    normalized.materials = normalized.materials.map((material: any, idx: number) => {
       if (!material || typeof material !== 'object') return material;
 
       const normalizedMaterial = { ...material };
+
+      // Generate missing id
+      if (!normalizedMaterial.id) {
+        console.log(`[Normalization] Generating missing id for material ${idx}`);
+        normalizedMaterial.id = uuidv4();
+      }
+
+      // Handle pbr_properties JSON string (if present, extract to pbr_diffuse)
+      if (typeof normalizedMaterial.pbr_properties === 'string') {
+        try {
+          const pbrData = JSON.parse(normalizedMaterial.pbr_properties);
+          console.log('[Normalization] Extracting pbr_properties JSON to pbr_diffuse');
+          normalizedMaterial.pbr_diffuse = {
+            description: normalizedMaterial.acabamento || 'Material properties',
+            color_hex: pbrData.diffuse_color || '#cccccc',
+            color_rgb: pbrData.color_rgb || { r: 204, g: 204, b: 204 },
+            saturation: pbrData.saturation ?? 50,
+            brightness: pbrData.brightness ?? 50,
+            texture_type: pbrData.texture_type || 'smooth',
+            texture_scale: pbrData.texture_scale || 'medium'
+          };
+          delete normalizedMaterial.pbr_properties; // Remove the string version
+        } catch (e) {
+          console.log('[Normalization] Failed to parse pbr_properties:', e);
+        }
+      }
 
       // Normalize pbr_diffuse if it's a string
       if (typeof normalizedMaterial.pbr_diffuse === 'string') {
@@ -562,6 +622,40 @@ const normalizeDiagnosisResponse = (data: any): any => {
       });
 
       return normalizedMaterial;
+    });
+  }
+
+  // Normalize lightPoints array
+  if (normalized.lightPoints && Array.isArray(normalized.lightPoints)) {
+    normalized.lightPoints = normalized.lightPoints.map((lightPoint: any, idx: number) => {
+      if (!lightPoint || typeof lightPoint !== 'object') return lightPoint;
+
+      const normalizedLight = { ...lightPoint };
+
+      // Generate missing id
+      if (!normalizedLight.id) {
+        console.log(`[Normalization] Generating missing id for lightPoint ${idx}`);
+        normalizedLight.id = uuidv4();
+      }
+
+      // Generate missing location_description
+      if (!normalizedLight.location_description) {
+        const type = normalizedLight.type || 'light';
+        const purpose = normalizedLight.purpose || 'accent';
+        console.log(`[Normalization] Generating missing location_description for lightPoint ${idx}`);
+        normalizedLight.location_description = `${type} (${purpose})`;
+      }
+
+      // Parse color_rgb if it's a string
+      if (normalizedLight.color_rgb) {
+        const parsedRgb = parseColorRgb(normalizedLight.color_rgb);
+        if (parsedRgb && typeof normalizedLight.color_rgb === 'string') {
+          console.log(`[Normalization] Parsing color_rgb string to object for lightPoint ${idx}`);
+          normalizedLight.color_rgb = parsedRgb;
+        }
+      }
+
+      return normalizedLight;
     });
   }
 
