@@ -1,14 +1,58 @@
-import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged, User } from 'firebase/auth';
-import { getFirestore, doc, getDoc, setDoc, updateDoc, collection, query, where, onSnapshot, getDocFromServer } from 'firebase/firestore';
-import { getStorage } from 'firebase/storage';
-import firebaseConfig from '../firebase-applet-config.json';
+/**
+ * Compatibility Layer for Firebase → Supabase Migration
+ * Este arquivo atua como ponte entre o código antigo (Firebase) e o novo (Supabase)
+ * Permite que o projeto continue funcionando durante a migração gradual
+ *
+ * NOTA: Este é um arquivo temporário. Remova conforme refatorar componentes para Supabase.
+ */
 
-const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-export const auth = getAuth(app);
-export const storage = getStorage(app);
-export const googleProvider = new GoogleAuthProvider();
+import { supabase } from './supabase';
+import type { User as SupabaseUser } from '@supabase/supabase-js';
+
+// ============================================================
+// AUTH COMPATIBILITY
+// ============================================================
+
+export const auth = {
+  currentUser: null as SupabaseUser | null,
+
+  getUser: async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    return user;
+  },
+
+  onAuthStateChanged: (callback: (user: SupabaseUser | null) => void) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      callback(session?.user || null);
+    });
+    return () => subscription?.unsubscribe();
+  },
+
+  signOut: async () => {
+    return await supabase.auth.signOut();
+  }
+};
+
+// ============================================================
+// DATABASE COMPATIBILITY
+// ============================================================
+
+export const db = {
+  collection: (name: string) => ({ name }),
+  doc: (collectionName: string, docId: string) => ({ collection: collectionName, id: docId })
+};
+
+// ============================================================
+// GOOGLE AUTH PROVIDER
+// ============================================================
+
+export const googleProvider = {
+  providerId: 'google.com'
+};
+
+// ============================================================
+// ADMIN EMAILS
+// ============================================================
 
 export const ADMIN_EMAILS = [
   "paulosilvatomazeto@gmail.com",
@@ -18,6 +62,10 @@ export const ADMIN_EMAILS = [
 export const isAdminEmail = (email: string | null | undefined) => {
   return email && ADMIN_EMAILS.includes(email);
 };
+
+// ============================================================
+// OPERATION TYPES
+// ============================================================
 
 export enum OperationType {
   CREATE = 'create',
@@ -44,39 +92,184 @@ export interface FirestoreErrorInfo {
       email: string | null;
       photoUrl: string | null;
     }[];
-  }
+  };
 }
 
-export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+export function handleFirestoreError(
+  error: unknown,
+  operationType: OperationType,
+  path: string | null
+) {
+  const user = (supabase.auth.getUser());
   const errInfo: FirestoreErrorInfo = {
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData.map(provider => ({
-        providerId: provider.providerId,
-        displayName: provider.displayName,
-        email: provider.email,
-        photoUrl: provider.photoURL
-      })) || []
+      userId: user.then(u => u.data?.user?.id),
+      email: user.then(u => u.data?.user?.email),
+      emailVerified: user.then(u => u.data?.user?.email_confirmed_at !== null),
+      isAnonymous: false,
+      tenantId: null,
+      providerInfo: []
     },
     operationType,
     path
-  }
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  };
+  console.error('Supabase Error: ', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
+}
+
+// ============================================================
+// FIRESTORE COMPATIBILITY STUBS
+// ============================================================
+
+export async function doc(collectionName: string, docId: string) {
+  return { collection: collectionName, id: docId };
+}
+
+export async function getDoc(ref: any) {
+  try {
+    const { data, error } = await supabase
+      .from(ref.collection)
+      .select('*')
+      .eq('id', ref.id)
+      .single();
+
+    if (error) throw error;
+
+    return {
+      exists: () => !!data,
+      data: () => data,
+      id: ref.id,
+      ref: ref
+    };
+  } catch (error) {
+    return {
+      exists: () => false,
+      data: () => null,
+      id: ref.id,
+      ref: ref
+    };
+  }
+}
+
+export async function setDoc(ref: any, data: any) {
+  const { error } = await supabase
+    .from(ref.collection)
+    .upsert({ id: ref.id, ...data }, { onConflict: 'id' });
+
+  if (error) throw error;
+}
+
+export async function updateDoc(ref: any, updates: any) {
+  const { error } = await supabase
+    .from(ref.collection)
+    .update(updates)
+    .eq('id', ref.id);
+
+  if (error) throw error;
+}
+
+export async function deleteDoc(ref: any) {
+  const { error } = await supabase
+    .from(ref.collection)
+    .delete()
+    .eq('id', ref.id);
+
+  if (error) throw error;
+}
+
+export function collection(name: string) {
+  return { name };
+}
+
+export function query(coll: any, ...constraints: any[]) {
+  return { collection: coll.name, constraints };
+}
+
+export function where(field: string, operator: string, value: any) {
+  return { field, operator, value };
+}
+
+export async function getDocs(q: any) {
+  try {
+    let query = supabase.from(q.collection).select('*');
+
+    if (q.constraints && q.constraints.length > 0) {
+      for (const constraint of q.constraints) {
+        if (constraint.field && constraint.operator && constraint.value !== undefined) {
+          if (constraint.operator === '==') {
+            query = query.eq(constraint.field, constraint.value);
+          } else if (constraint.operator === '<') {
+            query = query.lt(constraint.field, constraint.value);
+          } else if (constraint.operator === '<=') {
+            query = query.lte(constraint.field, constraint.value);
+          } else if (constraint.operator === '>') {
+            query = query.gt(constraint.field, constraint.value);
+          } else if (constraint.operator === '>=') {
+            query = query.gte(constraint.field, constraint.value);
+          }
+        }
+      }
+    }
+
+    const { data, error } = await query;
+
+    if (error) throw error;
+
+    return {
+      empty: !data || data.length === 0,
+      docs: (data || []).map((item: any) => ({
+        id: item.id,
+        data: () => item,
+        ref: { collection: q.collection, id: item.id }
+      }))
+    };
+  } catch (error) {
+    return {
+      empty: true,
+      docs: []
+    };
+  }
+}
+
+export function onSnapshot(ref: any, callback: (doc: any) => void) {
+  const channel = supabase
+    .channel(`${ref.collection}-${ref.id}`)
+    .on(
+      'postgres_changes',
+      {
+        event: 'UPDATE',
+        schema: 'public',
+        table: ref.collection,
+        filter: `id=eq.${ref.id}`
+      },
+      async (payload) => {
+        const doc = await getDoc(ref);
+        callback(doc);
+      }
+    )
+    .subscribe();
+
+  return () => channel.unsubscribe();
+}
+
+export async function getDocFromServer(ref: any) {
+  return await getDoc(ref);
 }
 
 export async function testConnection() {
   try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if(error instanceof Error && error.message.includes('the client is offline')) {
-      console.error("Please check your Firebase configuration.");
+    const { data, error } = await supabase
+      .from('users')
+      .select('id')
+      .limit(1);
+
+    if (error && error.code !== '42P01') {
+      // 42P01 = table doesn't exist
+      console.error("Please check your Supabase configuration.");
     }
+  } catch (error) {
+    console.error("Database connection error:", error);
   }
 }
 

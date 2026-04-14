@@ -477,20 +477,12 @@ export const useStudioStore = create<StudioState>((set) => ({
   setImageType: (type, source, confidence = 100, alternatives = []) => {
     const presets = getPresetsForType(type);
     const { sessionId } = useStudioStore.getState();
-    
-    // Update Firestore if we have a session
+
+    // Update database if we have a session
     if (sessionId) {
-      import('../firebase').then(({ db }) => {
-        import('firebase/firestore').then(({ doc, updateDoc }) => {
-          updateDoc(doc(db, 'generation_sessions', sessionId), {
-            image_type: type,
-            image_type_confidence: confidence,
-            type_detected_at: new Date().toISOString(),
-            type_source: source,
-            was_overridden: source === 'manual_override'
-          }).catch(e => console.warn('Failed to update type metadata in store action:', e));
-        });
-      });
+      // TODO: Update Supabase generation_sessions with image type metadata
+      // import { supabase } from '../supabase';
+      // supabase.from('generation_sessions').update({...}).eq('id', sessionId);
     }
 
     set((state): Partial<StudioState> => {

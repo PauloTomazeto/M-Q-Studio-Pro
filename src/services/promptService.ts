@@ -1,205 +1,240 @@
-import { db, auth } from '../firebase';
-import { 
-  collection, 
-  doc, 
-  setDoc, 
-  updateDoc, 
-  getDoc, 
-  getDocs, 
-  query, 
-  where, 
-  orderBy, 
-  serverTimestamp, 
-  increment,
-  addDoc,
-  deleteDoc
-} from 'firebase/firestore';
-import { v4 as uuidv4 } from 'uuid';
+/**
+ * Prompt Service - Supabase Version
+ * Gerencia prompts salvos
+ *
+ * Substitui: src/services/promptService.ts
+ */
 
-export interface Prompt {
-  id: string;
-  content: string;
-  version: number;
-  isAiGenerated: boolean;
-  qualityScore: number;
-  qualityBreakdown: {
-    clarity: number;
-    specificity: number;
-    coherence: number;
-    brevity: number;
-  };
-  wordCount: number;
-  characterCount: number;
-  promptMode: 'single' | 'blocks';
-  tags: string[];
-  createdAt: any;
-  updatedAt: any;
-  createdByUserId: string;
-  lastEditedByUserId: string | null;
-  copyCount: number;
-  isFavorite: boolean;
-  visibility: 'private' | 'shared' | 'public';
-  promptSource: 'gemini_ai' | 'manual' | 'edited_from_ai' | 'imported';
-  isLocked: boolean;
-  lockReason?: string;
-  usageCount: number;
+import { supabase, Prompt, PromptVersion } from '../supabase'
+
+// ============================================================
+// PROMPTS
+// ============================================================
+
+export async function createPrompt(userId: string, promptData: {
+  content: string
+  visibility?: 'private' | 'shared' | 'public'
+  prompt_source?: string
+}) {
+  const { data, error } = await supabase
+    .from('prompts')
+    .insert([{
+      ...promptData,
+      user_id: userId,
+      version: 1,
+      visibility: promptData.visibility || 'private',
+      is_locked: false,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    }])
+    .select()
+    .single()
+
+  if (error) throw error
+  return data as Prompt
 }
 
-export interface PromptVersion {
-  version: number;
-  content: string;
-  editedBy: string;
-  timestamp: any;
-  qualityScore: number;
+export async function getPrompt(promptId: string) {
+  const { data, error } = await supabase
+    .from('prompts')
+    .select('*')
+    .eq('id', promptId)
+    .single()
+
+  if (error) throw error
+  return data as Prompt
 }
 
-export const promptService = {
-  async saveGeneratedPrompt(data: Partial<Prompt>): Promise<string> {
-    const userId = auth.currentUser?.uid;
-    if (!userId) throw new Error('AUTH_REQUIRED');
+export async function getUserPrompts(userId: string) {
+  const { data, error } = await supabase
+    .from('prompts')
+    .select('*')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
 
-    const promptId = uuidv4();
-    const now = new Date().toISOString();
-    
-    const wordCount = (data.content || '').split(/\s+/).length;
-    const charCount = (data.content || '').length;
+  if (error) throw error
+  return data as Prompt[]
+}
 
-    const prompt: Prompt = {
-      id: promptId,
-      content: data.content || '',
-      version: 1,
-      isAiGenerated: data.isAiGenerated ?? true,
-      qualityScore: data.qualityScore || 85,
-      qualityBreakdown: data.qualityBreakdown || { clarity: 80, specificity: 80, coherence: 80, brevity: 80 },
-      wordCount,
-      characterCount: charCount,
-      promptMode: data.promptMode || 'single',
-      tags: data.tags || [],
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-      createdByUserId: userId,
-      lastEditedByUserId: null,
-      copyCount: 0,
-      isFavorite: false,
-      visibility: data.visibility || 'private',
-      promptSource: data.promptSource || 'gemini_ai',
-      isLocked: false,
-      usageCount: 0,
-      ...data
-    };
+export async function updatePrompt(promptId: string, content: string) {
+  const prompt = await getPrompt(promptId)
 
-    await setDoc(doc(db, 'prompts', promptId), prompt);
-
-    // Initial version
-    await setDoc(doc(db, 'prompts', promptId, 'versions', 'v1'), {
-      version: 1,
-      content: prompt.content,
-      editedBy: userId,
-      timestamp: serverTimestamp(),
-      qualityScore: prompt.qualityScore
-    });
-
-    return promptId;
-  },
-
-  async updatePrompt(promptId: string, newContent: string, qualityScore?: number): Promise<void> {
-    const userId = auth.currentUser?.uid;
-    if (!userId) throw new Error('AUTH_REQUIRED');
-
-    const promptRef = doc(db, 'prompts', promptId);
-    const promptSnap = await getDoc(promptRef);
-    
-    if (!promptSnap.exists()) throw new Error('PROMPT_NOT_FOUND');
-    const currentData = promptSnap.data() as Prompt;
-
-    if (currentData.isLocked) throw new Error(`PROMPT_LOCKED: ${currentData.lockReason}`);
-
-    const newVersion = currentData.version + 1;
-    const wordCount = newContent.split(/\s+/).length;
-    const charCount = newContent.length;
-
-    await updateDoc(promptRef, {
-      content: newContent,
+  // Criar nova versão
+  const newVersion = prompt.version + 1
+  await supabase
+    .from('prompt_versions')
+    .insert([{
+      prompt_id: promptId,
       version: newVersion,
-      isAiGenerated: false,
-      promptSource: 'edited_from_ai',
-      qualityScore: qualityScore || currentData.qualityScore, // Ideally recalculate
-      wordCount,
-      characterCount: charCount,
-      updatedAt: serverTimestamp(),
-      lastEditedByUserId: userId
-    });
+      content,
+      edited_by: prompt.user_id,
+      timestamp: new Date().toISOString()
+    }])
 
-    // Save version
-    await setDoc(doc(db, 'prompts', promptId, 'versions', `v${newVersion}`), {
+  // Atualizar prompt
+  const { data, error } = await supabase
+    .from('prompts')
+    .update({
+      content,
       version: newVersion,
-      content: newContent,
-      editedBy: userId,
-      timestamp: serverTimestamp(),
-      qualityScore: qualityScore || currentData.qualityScore
-    });
-  },
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', promptId)
+    .select()
+    .single()
 
-  async toggleFavorite(promptId: string, isFavorite: boolean): Promise<void> {
-    const userId = auth.currentUser?.uid;
-    if (!userId) throw new Error('AUTH_REQUIRED');
+  if (error) throw error
+  return data as Prompt
+}
 
-    await updateDoc(doc(db, 'prompts', promptId), { isFavorite });
+export async function updatePromptVisibility(
+  promptId: string,
+  visibility: 'private' | 'shared' | 'public'
+) {
+  const { data, error } = await supabase
+    .from('prompts')
+    .update({
+      visibility,
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', promptId)
+    .select()
+    .single()
 
-    const favId = `${userId}_${promptId}`;
-    if (isFavorite) {
-      await setDoc(doc(db, 'user_prompt_favorites', favId), {
-        userId,
-        promptId,
-        createdAt: serverTimestamp()
-      });
-    } else {
-      await deleteDoc(doc(db, 'user_prompt_favorites', favId));
-    }
-  },
+  if (error) throw error
+  return data as Prompt
+}
 
-  async incrementCopyCount(promptId: string): Promise<void> {
-    await updateDoc(doc(db, 'prompts', promptId), {
-      copyCount: increment(1)
-    });
-  },
+export async function deletePrompt(promptId: string) {
+  const { error } = await supabase
+    .from('prompts')
+    .delete()
+    .eq('id', promptId)
 
-  async setVisibility(promptId: string, visibility: 'private' | 'shared' | 'public'): Promise<void> {
-    await updateDoc(doc(db, 'prompts', promptId), { visibility });
-  },
+  if (error) throw error
+}
 
-  async shareWithUser(promptId: string, targetUserId: string, shareType: 'view' | 'edit' = 'view'): Promise<void> {
-    const shareId = `${targetUserId}_${promptId}`;
-    await setDoc(doc(db, 'user_prompt_shares', shareId), {
-      userId: targetUserId,
-      promptId,
-      shareType,
-      createdAt: serverTimestamp()
-    });
-  },
+// ============================================================
+// PROMPT VERSIONS
+// ============================================================
 
-  async getUserPrompts(): Promise<Prompt[]> {
-    const userId = auth.currentUser?.uid;
-    if (!userId) throw new Error('AUTH_REQUIRED');
+export async function getPromptVersions(promptId: string) {
+  const { data, error } = await supabase
+    .from('prompt_versions')
+    .select('*')
+    .eq('prompt_id', promptId)
+    .order('version', { ascending: false })
 
-    const q = query(
-      collection(db, 'prompts'),
-      where('createdByUserId', '==', userId),
-      orderBy('createdAt', 'desc')
-    );
+  if (error) throw error
+  return data as PromptVersion[]
+}
 
-    const querySnapshot = await getDocs(q);
-    return querySnapshot.docs.map(doc => doc.data() as Prompt);
-  },
+export async function getPromptVersion(promptId: string, version: number) {
+  const { data, error } = await supabase
+    .from('prompt_versions')
+    .select('*')
+    .eq('prompt_id', promptId)
+    .eq('version', version)
+    .single()
 
-  async getPublicPrompts(): Promise<Prompt[]> {
-    const q = query(
-      collection(db, 'prompts'),
-      where('visibility', '==', 'public'),
-      orderBy('createdAt', 'desc')
-    );
+  if (error) throw error
+  return data as PromptVersion
+}
 
-    const querySnapshot = await getDocs(q);
-    return querySnapshot.docs.map(doc => doc.data() as Prompt);
-  }
-};
+export async function restorePromptVersion(promptId: string, version: number) {
+  const versionData = await getPromptVersion(promptId, version)
+  return updatePrompt(promptId, versionData.content)
+}
+
+// ============================================================
+// PROMPT SHARING & FAVORITES
+// ============================================================
+
+export async function sharePrompt(promptId: string, userId: string, sharedBy: string) {
+  const { data, error } = await supabase
+    .from('user_prompt_shares')
+    .insert([{
+      prompt_id: promptId,
+      user_id: userId,
+      shared_by: sharedBy,
+      created_at: new Date().toISOString()
+    }])
+    .select()
+    .single()
+
+  if (error) throw error
+  return data
+}
+
+export async function unsharePrompt(promptId: string, userId: string) {
+  const { error } = await supabase
+    .from('user_prompt_shares')
+    .delete()
+    .eq('prompt_id', promptId)
+    .eq('user_id', userId)
+
+  if (error) throw error
+}
+
+export async function getSharedPrompts(userId: string) {
+  const { data, error } = await supabase
+    .from('user_prompt_shares')
+    .select('prompt_id')
+    .eq('user_id', userId)
+
+  if (error) throw error
+  return data
+}
+
+export async function favoritePrompt(userId: string, promptId: string) {
+  const { data, error } = await supabase
+    .from('user_prompt_favorites')
+    .insert([{
+      user_id: userId,
+      prompt_id: promptId,
+      created_at: new Date().toISOString()
+    }])
+    .select()
+    .single()
+
+  if (error) throw error
+  return data
+}
+
+export async function unfavoritePrompt(userId: string, promptId: string) {
+  const { error } = await supabase
+    .from('user_prompt_favorites')
+    .delete()
+    .eq('user_id', userId)
+    .eq('prompt_id', promptId)
+
+  if (error) throw error
+}
+
+export async function getUserFavoritePrompts(userId: string) {
+  const { data, error } = await supabase
+    .from('user_prompt_favorites')
+    .select('prompt_id')
+    .eq('user_id', userId)
+
+  if (error) throw error
+  return data
+}
+
+export default {
+  createPrompt,
+  getPrompt,
+  getUserPrompts,
+  updatePrompt,
+  updatePromptVisibility,
+  deletePrompt,
+  getPromptVersions,
+  getPromptVersion,
+  restorePromptVersion,
+  sharePrompt,
+  unsharePrompt,
+  getSharedPrompts,
+  favoritePrompt,
+  unfavoritePrompt,
+  getUserFavoritePrompts
+}

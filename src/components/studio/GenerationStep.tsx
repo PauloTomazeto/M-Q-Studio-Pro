@@ -1,11 +1,11 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useStudioStore } from '../../store/studioStore';
 import { useCredits } from '../../hooks/useCredits';
-import { kieService } from '../../services/kieService';
+import kieService from '../../services/kieService';
 import { uploadTempImage, compressImage } from '../../services/storageService';
 import { imageGenerationService } from '../../services/imageGenerationService';
 import { auth, db } from '../../firebase';
-import { doc, updateDoc, setDoc } from 'firebase/firestore';
+// import { doc, updateDoc, setDoc } from 'firebase/firestore'; // Migrated to Supabase
 import { 
   Loader2, Download, Share2, CheckCircle2, AlertCircle, 
   Image as ImageIcon, RefreshCw, Maximize2, Monitor, 

@@ -1,0 +1,229 @@
+import express from "express";
+import { createServer as createViteServer } from "vite";
+import path from "path";
+import { fileURLToPath } from "url";
+import dotenv from "dotenv";
+
+// ✅ AJUSTE #1: Secrets Manager
+import { getSecrets, startSecretsRotation } from "./src/config/secretsManager";
+
+// ✅ AJUSTE #4: Logger Estruturado
+import { createLogger } from "./src/utils/logger";
+import { requestIdMiddleware } from "./src/middleware/requestId";
+
+// ✅ AJUSTE #2: Retry + Circuit Breaker
+import { createRetryableClient } from "./src/utils/axiosRetry";
+import { kieApiBreaker } from "./src/utils/circuitBreaker";
+
+// ✅ AJUSTE #3: Webhook Handler
+import { webhookRouteHandler } from "./src/handlers/webhookHandler";
+
+dotenv.config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const logger = createLogger('Server');
+
+async function startServer() {
+  const app = express();
+  const PORT = 3000;
+
+  // ✅ Middleware: JSON parser
+  app.use(express.json({ limit: '50mb' }));
+
+  // ✅ AJUSTE #4: RequestId middleware (deve ser primeiro)
+  app.use(requestIdMiddleware);
+
+  // ✅ AJUSTE #1: Load secrets na inicialização
+  let secrets;
+  try {
+    secrets = await getSecrets();
+    logger.info('Secrets loaded successfully');
+
+    // Iniciar rotação de secrets
+    startSecretsRotation();
+  } catch (error: any) {
+    logger.error('Failed to load secrets', { error: error.message });
+    process.exit(1);
+  }
+
+  // ✅ AJUSTE #2: Criar cliente Axios com retry
+  const kieClient = createRetryableClient({
+    MAX_RETRIES: 3,
+    INITIAL_DELAY: 1000,
+    MAX_DELAY: 10000,
+    BACKOFF_MULTIPLIER: 2,
+    JITTER: true
+  });
+
+  // CORS Headers
+  app.use((req, res, next) => {
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    if (req.path === '/') {
+      logger.debug('CORS headers set', {
+        coop: 'same-origin-allow-popups',
+        corp: 'cross-origin'
+      });
+    }
+    next();
+  });
+
+  // ✅ AJUSTE #3: Webhook Handler (KIE.AI)
+  app.post("/api/webhook/kie", express.json(), async (req, res) => {
+    try {
+      const result = await webhookRouteHandler(req, res);
+    } catch (error: any) {
+      logger.error('Webhook error not caught', {
+        error: error.message
+      });
+    }
+  });
+
+  // ✅ AJUSTE #2: KIE API Proxy com Retry + Circuit Breaker
+  app.all("/api/kie/*", async (req, res) => {
+    const requestId = req.id;
+    const startTime = Date.now();
+
+    logger.setContext({
+      requestId,
+      method: req.method,
+      endpoint: req.params[0]
+    });
+
+    try {
+      const subPath = req.params[0];
+      const targetUrl = `https://api.kie.ai/${subPath}`;
+
+      logger.info('KIE_REQUEST_START', {
+        url: targetUrl,
+        bodySize: JSON.stringify(req.body).length
+      });
+
+      // ✅ AJUSTE #2: Circuit Breaker protection
+      const response = await kieApiBreaker.execute(() =>
+        kieClient({
+          method: req.method,
+          url: targetUrl,
+          data: req.body,
+          params: req.query,
+          headers: {
+            "Authorization": `Bearer ${secrets.KIE_API_KEY}`,
+            "x-api-key": secrets.KIE_API_KEY,
+            "Content-Type": "application/json",
+            "x-request-id": requestId
+          },
+          timeout: 30000 // ✅ Reduzido de 180s para 30s
+        })
+      );
+
+      const duration = Date.now() - startTime;
+
+      logger.info('KIE_REQUEST_SUCCESS', {
+        statusCode: response.status,
+        duration
+      });
+
+      res.status(response.status).json(response.data);
+
+    } catch (error: any) {
+      const duration = Date.now() - startTime;
+      const cbMetrics = kieApiBreaker.getMetrics();
+
+      // ✅ AJUSTE #2: Rate limit (429)
+      if (error.response?.status === 429) {
+        const retryAfter = error.response.headers['retry-after'] || '60';
+        res.set('Retry-After', retryAfter);
+        res.set('X-RateLimit-Reset', new Date(Date.now() + parseInt(retryAfter) * 1000).toISOString());
+
+        logger.warn('RATE_LIMITED', {
+          retryAfter: parseInt(retryAfter),
+          cbState: cbMetrics.state,
+          duration
+        });
+
+        return res.status(429).json({
+          error: "RATE_LIMITED",
+          retryAfter: parseInt(retryAfter),
+          message: "KIE API rate limit reached. Please retry after delay."
+        });
+      }
+
+      // ✅ AJUSTE #2: Circuit breaker is open
+      if (cbMetrics.state === 'OPEN') {
+        logger.error('CIRCUIT_BREAKER_OPEN', {
+          failures: cbMetrics.failureCount,
+          duration
+        });
+
+        return res.status(503).json({
+          error: "SERVICE_UNAVAILABLE",
+          message: "KIE API is temporarily unavailable. Please try again later.",
+          cbState: 'OPEN'
+        });
+      }
+
+      // Outros erros
+      logger.error('KIE_REQUEST_FAILED', {
+        error: error.message,
+        code: error.code,
+        statusCode: error.response?.status,
+        cbState: cbMetrics.state,
+        duration
+      });
+
+      res.status(error.response?.status || 500).json({
+        error: "KIE_API_ERROR",
+        message: error.message,
+        requestId
+      });
+    }
+  });
+
+  // Stripe Integration (placeholder - implementar depois)
+  app.post("/api/stripe/create-checkout-session", async (req, res) => {
+    const { planId, userId, email } = req.body;
+    logger.warn('STRIPE_NOT_IMPLEMENTED', {
+      planId,
+      userId
+    });
+    res.json({ url: 'https://checkout.stripe.com/pay/placeholder' });
+  });
+
+  app.post("/api/stripe/webhook", express.raw({ type: 'application/json' }), (req, res) => {
+    logger.warn('STRIPE_WEBHOOK_NOT_IMPLEMENTED');
+    res.json({ received: true });
+  });
+
+  // Vite middleware for development
+  if (process.env.NODE_ENV !== "production") {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa",
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.join(process.cwd(), 'dist');
+    app.use(express.static(distPath));
+    app.get('*', (req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
+  }
+
+  app.listen(PORT, "0.0.0.0", () => {
+    logger.info(`Server running on http://localhost:${PORT}`);
+    logger.info('Server configuration', {
+      nodeEnv: process.env.NODE_ENV || 'development',
+      logLevel: process.env.LOG_LEVEL || 'info',
+      secretsRotation: 'enabled (30min interval)',
+      retryLogic: 'enabled (3 retries, exponential backoff)',
+      circuitBreaker: 'enabled (5 failures to open, 30s timeout)'
+    });
+  });
+}
+
+startServer().catch((error) => {
+  console.error('Failed to start server:', error.message);
+  process.exit(1);
+});

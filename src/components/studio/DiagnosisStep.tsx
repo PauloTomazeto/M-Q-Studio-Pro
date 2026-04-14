@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useStudioStore } from '../../store/studioStore';
-import { kieService } from '../../services/kieService';
+import kieService from '../../services/kieService';
 import { useCredits } from '../../hooks/useCredits';
 import { detectTypeFromFeatures } from '../../utils/typeDetection';
 import TypeBadge from './TypeBadge';

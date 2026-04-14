@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Material } from '../../types/studio';
 import { useStudioStore } from '../../store/studioStore';
-import { kieService } from '../../services/kieService';
+import kieService from '../../services/kieService';
 import { Edit3, Image as ImageIcon, CheckCircle2, AlertCircle, Loader2, Upload, Maximize2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import MaterialEditor from './MaterialEditor';

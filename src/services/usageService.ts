@@ -1,60 +1,113 @@
-import { 
-  collection, 
-  addDoc, 
-  serverTimestamp,
-  query,
-  where,
-  orderBy,
-  getDocs,
-  limit
-} from 'firebase/firestore';
-import { db, auth, OperationType, handleFirestoreError } from '../firebase';
+/**
+ * Usage Service - Supabase Version
+ * Registra logs de uso
+ *
+ * Substitui: src/services/usageService.ts
+ */
 
-export type UsageType = 'prompt' | 'scan' | 'read' | 'image' | 'video';
+import { supabase, UsageLog } from '../supabase'
 
-export interface UsageLog {
-  id?: string;
-  userId: string;
-  type: UsageType;
-  model?: string;
-  resolution?: string;
-  timestamp: any;
-  metadata?: any;
+export async function logPromptUsage(userId: string, model?: string) {
+  return logUsage(userId, 'prompt', model)
 }
 
-export const usageService = {
-  async logUsage(type: UsageType, details?: { model?: string; resolution?: string; metadata?: any }) {
-    const user = auth.currentUser;
-    if (!user) return;
+export async function logScanUsage(userId: string, model?: string) {
+  return logUsage(userId, 'scan', model)
+}
 
-    try {
-      await addDoc(collection(db, 'usage_logs'), {
-        userId: user.uid,
-        type,
-        model: details?.model || 'default',
-        resolution: details?.resolution || 'n/a',
-        timestamp: serverTimestamp(),
-        metadata: details?.metadata || {}
-      });
-    } catch (error) {
-      console.error('Failed to log usage:', error);
-      // We don't throw here to avoid breaking the main flow if logging fails
-    }
-  },
+export async function logReadUsage(userId: string) {
+  return logUsage(userId, 'read')
+}
 
-  async getLogs(userId?: string, limitCount = 100) {
-    try {
-      let q = query(collection(db, 'usage_logs'), orderBy('timestamp', 'desc'), limit(limitCount));
-      
-      if (userId) {
-        q = query(collection(db, 'usage_logs'), where('userId', '==', userId), orderBy('timestamp', 'desc'), limit(limitCount));
-      }
+export async function logImageGenerationUsage(userId: string, model?: string) {
+  return logUsage(userId, 'image', model)
+}
 
-      const snap = await getDocs(q);
-      return snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as UsageLog));
-    } catch (error) {
-      handleFirestoreError(error, OperationType.LIST, 'usage_logs');
-      throw error;
-    }
+export async function logVideoUsage(userId: string, model?: string) {
+  return logUsage(userId, 'video', model)
+}
+
+async function logUsage(
+  userId: string,
+  type: 'prompt' | 'scan' | 'read' | 'image' | 'video',
+  model?: string
+) {
+  const { data, error } = await supabase
+    .from('usage_logs')
+    .insert([{
+      user_id: userId,
+      type,
+      model,
+      timestamp: new Date().toISOString()
+    }])
+    .select()
+    .single()
+
+  if (error) throw error
+  return data as UsageLog
+}
+
+export async function getUserUsageLogs(userId: string, limit: number = 100) {
+  const { data, error } = await supabase
+    .from('usage_logs')
+    .select('*')
+    .eq('user_id', userId)
+    .order('timestamp', { ascending: false })
+    .limit(limit)
+
+  if (error) throw error
+  return data as UsageLog[]
+}
+
+export async function getUsageByType(userId: string, type: string) {
+  const { data, error } = await supabase
+    .from('usage_logs')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('type', type)
+    .order('timestamp', { ascending: false })
+
+  if (error) throw error
+  return data as UsageLog[]
+}
+
+export async function getUsageStats(userId: string, days: number = 30) {
+  const dateFrom = new Date()
+  dateFrom.setDate(dateFrom.getDate() - days)
+
+  const { data, error } = await supabase
+    .from('usage_logs')
+    .select('type')
+    .eq('user_id', userId)
+    .gte('timestamp', dateFrom.toISOString())
+
+  if (error) throw error
+
+  const stats = {
+    total: data?.length || 0,
+    prompt: 0,
+    scan: 0,
+    read: 0,
+    image: 0,
+    video: 0
   }
-};
+
+  data?.forEach((log: any) => {
+    if (log.type in stats) {
+      stats[log.type as keyof typeof stats]++
+    }
+  })
+
+  return stats
+}
+
+export default {
+  logPromptUsage,
+  logScanUsage,
+  logReadUsage,
+  logImageGenerationUsage,
+  logVideoUsage,
+  getUserUsageLogs,
+  getUsageByType,
+  getUsageStats
+}

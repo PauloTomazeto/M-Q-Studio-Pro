@@ -19,14 +19,14 @@ import {
   ChevronRight
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { 
-  uploadImage, 
-  validateFileChain, 
-  compressImage,
-  ValidationChainResult,
-  ValidationStepResult 
+import {
+  uploadImage
+  // validateFileChain,
+  // compressImage,
+  // ValidationChainResult,
+  // ValidationStepResult
 } from '../../services/storageService';
-import { kieService } from '../../services/kieService';
+import kieService from '../../services/kieService';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 

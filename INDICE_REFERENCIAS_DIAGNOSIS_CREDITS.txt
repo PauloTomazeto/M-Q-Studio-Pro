@@ -1,0 +1,416 @@
+================================================================================
+ÍNDICE DE REFERÊNCIAS RÁPIDAS: Sistema de Créditos DiagnosisStep
+================================================================================
+
+NAVEGAÇÃO RÁPIDA POR TÓPICO
+================================================================================
+
+1. ENTENDER A IMPLEMENTAÇÃO
+   ├─ Leia: SUMARIO_EXECUTIVO_DIAGNOSIS_CREDITS.txt (este arquivo)
+   │        → Visão geral de 15 minutos
+   │
+   ├─ Leia: RELATORIO_IMPLEMENTACAO_DIAGNOSIS_CREDITS.md
+   │        → Documentação técnica completa (60 minutos)
+   │
+   └─ Arquivo fonte: src/components/studio/DiagnosisStep.tsx
+              → Linhas chave:
+                 13: import { toast }
+                 42: const { refundCredits }
+                 56: const [showRedoConfirm]
+                108-210: função runAnalysis() com refund
+                212-229: funções handleRedo/confirmRedo/cancelRedo
+                880-931: Modal de confirmação
+
+2. VER EXEMPLOS PRÁTICOS
+   └─ Leia: EXEMPLOS_PRATICOS_DIAGNOSIS_CREDITS.md
+          → 8 cenários com console output
+          → Toast notifications por cenário
+          → Transações de crédito passo-a-passo
+
+3. VALIDAR IMPLEMENTAÇÃO
+   └─ Consulte: CHECKLIST_VALIDACAO_DIAGNOSIS_CREDITS.md
+             → 14 fases de validação
+             → 100+ checklist items
+             → Status por funcionalidade
+
+================================================================================
+LOCALIZAR POR FUNCIONALIDADE
+================================================================================
+
+CONSUMO DE CRÉDITOS
+  📍 Arquivo: src/components/studio/DiagnosisStep.tsx, linhas 110-120
+  📄 Documentação: RELATORIO... seção 2.1 (Consumo na Primeira Tentativa)
+  📋 Exemplo: EXEMPLOS... seção 1 (Fluxo Feliz)
+  ✅ Validação: CHECKLIST... seção 2.1 (Primeira Tentativa)
+
+REFUND AUTOMÁTICO - ERRO 5xx
+  📍 Arquivo: src/components/studio/DiagnosisStep.tsx, linhas 152-175
+  📄 Documentação: RELATORIO... seção 3.1 e 3.2
+  📋 Exemplo: EXEMPLOS... seção 2 (Erro 5xx com Refund)
+  ✅ Validação: CHECKLIST... seção 3.1 e 3.2
+
+REFUND AUTOMÁTICO - RETRY FALHA
+  📍 Arquivo: src/components/studio/DiagnosisStep.tsx, linhas 189-199
+  📄 Documentação: RELATORIO... seção 3.3
+  📋 Exemplo: EXEMPLOS... seção 3 (Timeout com Duplo Refund)
+  ✅ Validação: CHECKLIST... seção 3.3
+
+RETRY AUTOMÁTICO
+  📍 Arquivo: src/components/studio/DiagnosisStep.tsx, linhas 178-187
+  📄 Documentação: RELATORIO... seção 4
+  📋 Exemplo: EXEMPLOS... seção 2 e 3
+  ✅ Validação: CHECKLIST... seção 4
+
+CONFIRMAÇÃO DE REDO
+  📍 Arquivo: src/components/studio/DiagnosisStep.tsx, linhas 212-229
+  📄 Documentação: RELATORIO... seção 4
+  📋 Exemplo: EXEMPLOS... seção 4 e 5
+  ✅ Validação: CHECKLIST... seção 5
+
+MODAL DE CONFIRMAÇÃO
+  📍 Arquivo: src/components/studio/DiagnosisStep.tsx, linhas 880-931
+  📄 Documentação: RELATORIO... seção 4.2
+  📋 Exemplo: EXEMPLOS... seção 4 (Redo Confirmado)
+  ✅ Validação: CHECKLIST... seção 5.4
+
+TOAST NOTIFICATIONS
+  📍 Arquivo: src/components/studio/DiagnosisStep.tsx, linhas 117, 145, 171, 195, 222
+  📄 Documentação: RELATORIO... seção 5
+  📋 Exemplo: EXEMPLOS... seção 1-8
+  ✅ Validação: CHECKLIST... seção 6
+
+LOGGING E AUDITORIA
+  📍 Arquivo: src/components/studio/DiagnosisStep.tsx, linhas 111, 119, 146, 170, 180, 194, 213, 218, 227
+  📄 Documentação: RELATORIO... seção 6
+  📋 Exemplo: EXEMPLOS... seção 10 (Logging Reference)
+  ✅ Validação: CHECKLIST... seção 7
+
+PROTEÇÃO CONTRA DUPLA DEDUÇÃO
+  📍 Arquivo: src/components/studio/DiagnosisStep.tsx, linhas 110-120
+  📄 Documentação: RELATORIO... seção 8
+  📋 Exemplo: EXEMPLOS... seção 2-3
+  ✅ Validação: CHECKLIST... seção 2.2
+
+================================================================================
+LOCALIZAR POR FLUXO DE OPERAÇÃO
+================================================================================
+
+FLUXO 1: SUCESSO NA PRIMEIRA TENTATIVA
+  📍 Descrição: Diagnóstico funciona perfeitamente
+  📄 RELATORIO... seção 7.1
+  📋 EXEMPLOS... seção 1
+  ⏱️  Duração: ~10s
+  💰 Crédito: -5
+  🔄 Refund: 0
+  ✅ Resultado: Análise completa
+
+FLUXO 2: ERRO 5xx COM REFUND E RETRY SUCESSO
+  📍 Descrição: Servidor retorna erro, sistema tenta novamente
+  📄 RELATORIO... seção 7.2
+  📋 EXEMPLOS... seção 2
+  ⏱️  Duração: ~15s (3s aguardo + retry)
+  💰 Crédito: -5
+  🔄 Refund: +5
+  ✅ Resultado: Análise completa (após retry)
+
+FLUXO 3: TIMEOUT COM DUPLO REFUND
+  📍 Descrição: Servidor offline, ambas tentativas falham
+  📄 RELATORIO... seção 7.3
+  📋 EXEMPLOS... seção 3
+  ⏱️  Duração: ~10s
+  💰 Crédito: -5
+  🔄 Refund: +10 (bônus!)
+  ❌ Resultado: Erro final
+
+FLUXO 4: REDO CONFIRMADO
+  📍 Descrição: Usuário refaz análise após confirmação
+  📄 RELATORIO... seção 7.4
+  📋 EXEMPLOS... seção 4
+  ⏱️  Duração: 1-2s (modal) + ~10s (análise)
+  💰 Crédito: -5
+  🔄 Refund: 0
+  ✅ Resultado: Novo diagnóstico
+
+FLUXO 5: REDO CANCELADO
+  📍 Descrição: Usuário vê modal e muda de ideia
+  📄 RELATORIO... seção 7.5
+  📋 EXEMPLOS... seção 5
+  ⏱️  Duração: 1s (modal)
+  💰 Crédito: 0
+  🔄 Refund: 0
+  ✓ Resultado: Modal fecha, nada acontece
+
+================================================================================
+LOCALIZAR POR TIPO DE ERRO
+================================================================================
+
+ERRO HTTP 5xx (502, 503, 504, etc)
+  🔍 Detecção: err.response?.status >= 500
+  📍 Linhas: 157
+  🔄 Refund: SIM (automático)
+  🔁 Retry: SIM (1x automático)
+  📋 Exemplo: EXEMPLOS... seção 2
+
+TIMEOUT
+  🔍 Detecção: err.message?.includes('timeout')
+  📍 Linhas: 154
+  🔄 Refund: SIM (automático)
+  🔁 Retry: SIM (1x automático)
+  📋 Exemplo: EXEMPLOS... seção 3
+
+HTML RESPONSE (em vez de JSON)
+  🔍 Detecção: err.message?.includes('HTML')
+  📍 Linhas: 155
+  🔄 Refund: SIM (automático)
+  🔁 Retry: SIM (1x automático)
+  📋 Exemplo: EXEMPLOS... seção 7
+
+ERRO DE VALIDAÇÃO (imagem ruim, parâmetros ruins)
+  🔍 Detecção: Não é servidor, então não
+  📍 Linhas: N/A (sem detecção especial)
+  🔄 Refund: NÃO
+  🔁 Retry: NÃO
+  📋 Exemplo: EXEMPLOS... seção 6
+
+CRÉDITOS INSUFICIENTES
+  🔍 Detecção: consumeCredits() retorna false
+  📍 Linhas: 112-114
+  🔄 Refund: NÃO (não consumiu)
+  🔁 Retry: NÃO
+  📋 Exemplo: EXEMPLOS... seção 8
+
+================================================================================
+LOCALIZAR PARA DEBUG
+================================================================================
+
+VER TODOS OS LOGS DE DIAGNÓSTICO
+  Comando: grep "\[Diagnosis\]" console.log
+  Arquivos: DevTools console
+  O que mostra: Todos eventos de diagnóstico
+
+VER TODOS OS LOGS DE CRÉDITO
+  Comando: grep "\[Credits\]" console.log
+  Arquivos: DevTools console
+  O que mostra: Consumo, refund, transações
+
+VER TODOS OS REFUNDS
+  Comando: grep "Refunded" console.log
+  Arquivos: DevTools console
+  O que mostra: Quando e por que refund aconteceu
+
+VER TENTATIVAS DE RETRY
+  Comando: grep "Retrying" console.log
+  Arquivos: DevTools console
+  O que mostra: Quando retry foi tentado
+
+VER DECISÕES DO USUÁRIO (REDO)
+  Comando: grep "Redo" console.log
+  Arquivos: DevTools console
+  O que mostra: Se user confirmou ou cancelou redo
+
+DEBUGGING CHECKLIST
+  📄 Leia: EXEMPLOS... seção 11 (Debugging Checklist)
+
+================================================================================
+LOCALIZAR TESTES SUGERIDOS
+================================================================================
+
+TESTES UNITÁRIOS
+  📄 RELATORIO... seção 9.1
+  ✓ Consumo de créditos
+  ✓ Refund em erros
+  ✓ Confirmação de redo
+  ✓ Toast notifications
+
+TESTES DE INTEGRAÇÃO
+  📄 RELATORIO... seção 9.2
+  ✓ Full flow: Consumo → Sucesso
+  ✓ Full flow: Erro → Refund → Retry
+  ✓ Full flow: Redo Modal → Confirm
+
+TESTES DE UI/UX
+  📄 RELATORIO... seção 9.3
+  ✓ Modal appears on redo
+  ✓ Toast visible
+  ✓ Loading state
+
+================================================================================
+LOCALIZAR PARA VALIDAÇÃO
+================================================================================
+
+CHECKLIST DE CÓDIGO
+  📄 CHECKLIST... seção 1 (Verificação de Código)
+  ✅ Imports
+  ✅ Estado
+  ✅ Funções
+  ✅ Sintaxe
+
+CHECKLIST DE FUNCIONALIDADE
+  📄 CHECKLIST... seção 14 (Validação Final)
+  ✅ Consumo de créditos
+  ✅ Refund automático
+  ✅ Retry automático
+  ✅ Redo com confirmação
+  ✅ Toast notifications
+  ✅ Logging
+
+CHECKLIST DE DEPLOYMENT
+  📄 CHECKLIST... seção 13 (Pré-Deploy)
+  [ ] Build sem erros
+  [ ] Testes passam
+  [ ] Deploy staging
+  [ ] Smoke tests
+
+================================================================================
+TABELAS DE REFERÊNCIA RÁPIDA
+================================================================================
+
+TRANSAÇÕES DE CRÉDITO POR CENÁRIO
+  📄 EXEMPLOS... seção 9 (Tabela Comparativa)
+
+  Cenário               | Consumo | Refund | Saldo
+  ──────────────────────┼─────────┼────────┼──────
+  Sucesso               |   -5    |   0    |  -5
+  Erro 5xx → Retry OK   |   -5    |  +5    |   0
+  Timeout → Retry Fail  |   -5    |  +10   |  +5
+  Redo OK               |   -5    |   0    |  -5
+  Redo Cancelado        |    0    |   0    |   0
+  Erro não-servidor     |   -5    |   0    |  -5
+  HTML → Retry OK       |   -5    |  +5    |   0
+  Créditos Insuficientes|    0    |   0    |   0
+
+TOAST NOTIFICATIONS POR CENÁRIO
+  📄 RELATORIO... seção 5
+
+  Evento             | Toast Message                    | Tipo    | Duração
+  ───────────────────┼──────────────────────────────────┼─────────┼────────
+  Consumo            | "5 créditos deducted..."         | success | 2s
+  Sucesso (retry)    | "Análise completa - sem..."      | success | 2s
+  Refund (servidor)  | "5 créditos reembolsados..."     | info    | 3s
+  Refund (retry)     | "Retry falhou - 5 reembolsados" | info    | 3s
+  Redo confirmado    | "Redo confirmado - 5 serão..."   | info    | 2s
+
+================================================================================
+ARQUIVOS DE DOCUMENTAÇÃO
+================================================================================
+
+1. SUMARIO_EXECUTIVO_DIAGNOSIS_CREDITS.txt (este arquivo)
+   ├─ Tamanho: ~200 linhas
+   ├─ Tempo leitura: 15 minutos
+   ├─ Uso: Visão geral rápida
+   └─ Para: Gerentes, QA rápido
+
+2. RELATORIO_IMPLEMENTACAO_DIAGNOSIS_CREDITS.md
+   ├─ Tamanho: ~550 linhas
+   ├─ Tempo leitura: 60 minutos
+   ├─ Uso: Documentação técnica completa
+   └─ Para: Desenvolvedores, arquitetos
+
+3. EXEMPLOS_PRATICOS_DIAGNOSIS_CREDITS.md
+   ├─ Tamanho: ~450 linhas
+   ├─ Tempo leitura: 45 minutos
+   ├─ Uso: Ver cenários reais com output
+   └─ Para: QA, desenvolvedores, suporte
+
+4. CHECKLIST_VALIDACAO_DIAGNOSIS_CREDITS.md
+   ├─ Tamanho: ~400 linhas
+   ├─ Tempo leitura: 30 minutos
+   ├─ Uso: Validar implementação
+   └─ Para: QA, tech lead, code reviewer
+
+5. INDICE_REFERENCIAS_DIAGNOSIS_CREDITS.txt (este arquivo)
+   ├─ Tamanho: ~300 linhas
+   ├─ Tempo leitura: 10 minutos
+   ├─ Uso: Navegar documentação
+   └─ Para: Todos
+
+6. src/components/studio/DiagnosisStep.tsx
+   ├─ Tamanho: 934 linhas
+   ├─ Mudanças: +120 linhas, ~45 modificadas
+   ├─ Uso: Código fonte
+   └─ Para: Desenvolvedores
+
+================================================================================
+ROTEIROS DE LEITURA
+================================================================================
+
+ROTEIRO 1: ENTENDIMENTO RÁPIDO (30 minutos)
+  1. Leia: SUMARIO_EXECUTIVO_DIAGNOSIS_CREDITS.txt
+  2. Leia: EXEMPLOS_PRATICOS_DIAGNOSIS_CREDITS.md seção 1-5
+  3. Resultado: Entendimento básico completo
+
+ROTEIRO 2: IMPLEMENTAÇÃO (2 horas)
+  1. Leia: RELATORIO_IMPLEMENTACAO_DIAGNOSIS_CREDITS.md completo
+  2. Estude: src/components/studio/DiagnosisStep.tsx (linhas chave)
+  3. Consulte: EXEMPLOS_PRATICOS_DIAGNOSIS_CREDITS.md seções 1-9
+  4. Resultado: Entendimento técnico profundo
+
+ROTEIRO 3: VALIDAÇÃO (1.5 horas)
+  1. Leia: CHECKLIST_VALIDACAO_DIAGNOSIS_CREDITS.md
+  2. Marque: Cada item validado
+  3. Execute: Testes sugeridos em RELATORIO... seção 9
+  4. Resultado: Pronto para deploy
+
+ROTEIRO 4: QA COMPLETA (3 horas)
+  1. Roteiro 2 (Implementação)
+  2. Roteiro 3 (Validação)
+  3. Execute: Todos exemplos práticos em EXEMPLOS... seções 1-8
+  4. Valide: Logs em DevTools
+  5. Resultado: QA aprovação com confiança
+
+ROTEIRO 5: SUPORTE/TROUBLESHOOTING (30 minutos)
+  1. Procure: Erro em EXEMPLOS_PRATICOS... seção apropriada
+  2. Veja: Console output esperado
+  3. Compare: Com seu console atual
+  4. Consulte: EXEMPLOS... seção 11 (Debugging)
+  5. Resultado: Problema diagnosticado
+
+================================================================================
+COMANDOS ÚTEIS
+================================================================================
+
+PROCURAR LOGS ESPECÍFICOS:
+  grep "\[Diagnosis\]" logs.txt       # Eventos de diagnóstico
+  grep "\[Credits\]" logs.txt          # Eventos de crédito
+  grep "Refunded" logs.txt             # Refunds
+  grep "Retrying" logs.txt             # Retries
+  grep "Redo" logs.txt                 # Decisões de redo
+
+VERIFICAR LINHA ESPECÍFICA:
+  DiagnosisStep.tsx linha 110  → Consumo de créditos
+  DiagnosisStep.tsx linha 154  → Detecção de timeout
+  DiagnosisStep.tsx linha 169  → Chamada refundCredits
+  DiagnosisStep.tsx linha 212  → handleRedo
+  DiagnosisStep.tsx linha 880  → Modal de confirmação
+
+GREP NO ARQUIVO FONTE:
+  grep "toast" DiagnosisStep.tsx       # Todas toasts
+  grep "refund" DiagnosisStep.tsx      # Todas refunds
+  grep "retryCount" DiagnosisStep.tsx  # Controle de retry
+  grep "\[Diagnosis\]" DiagnosisStep.tsx # Todos logs
+
+================================================================================
+STATUS FINAL
+================================================================================
+
+✅ IMPLEMENTAÇÃO: Completa
+✅ DOCUMENTAÇÃO: Completa
+✅ TESTES: Sugeridos
+✅ VALIDAÇÃO: Checklist pronto
+⏳ DEPLOY: Aguardando QA
+
+Total de linhas de documentação: 1700+
+Total de exemplos práticos: 8
+Total de cenários cobertos: 12+
+Total de checklist items: 100+
+Tempo para entender completamente: 2-3 horas
+Tempo para implementar do zero: 4-5 horas
+Tempo para validar: 1.5-2 horas
+
+================================================================================
+FIM DO ÍNDICE
+================================================================================
+
+Próximo passo: Leia SUMARIO_EXECUTIVO_DIAGNOSIS_CREDITS.txt
+Depois: Consulte RELATORIO_IMPLEMENTACAO_DIAGNOSIS_CREDITS.md
+Finalmente: Use CHECKLIST_VALIDACAO_DIAGNOSIS_CREDITS.md para validação

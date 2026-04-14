@@ -4,7 +4,7 @@ import { useStudioStore } from '../../store/studioStore';
 import { X, Save, Layers, Sun, Activity, Box, Info, Trash2, Camera, Loader2, Maximize2, Image as ImageIcon, CheckCircle2 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { validateMaterial, MATERIAL_CATEGORIES } from '../../utils/materialUtils';
-import { kieService } from '../../services/kieService';
+import kieService from '../../services/kieService';
 
 interface MaterialEditorProps {
   material: Material;

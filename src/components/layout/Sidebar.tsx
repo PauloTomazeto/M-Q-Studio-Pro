@@ -15,7 +15,7 @@ import {
   ShieldCheck
 } from 'lucide-react';
 import { auth, isAdminEmail } from '../../firebase';
-import { signOut } from 'firebase/auth';
+// import { signOut } from 'firebase/auth';
 import { motion } from 'framer-motion';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';

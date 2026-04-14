@@ -1,256 +1,245 @@
-import { 
-  collection, 
-  doc, 
-  getDocs, 
-  getDoc, 
-  updateDoc, 
-  query, 
-  where, 
-  orderBy, 
-  limit,
-  Timestamp,
-  setDoc,
-  deleteDoc
-} from 'firebase/firestore';
-import { db, OperationType, handleFirestoreError } from '../firebase';
+/**
+ * Admin Service - Supabase Version
+ * Gerencia usuários, planos, configurações
+ *
+ * Substitui: src/services/adminService.ts
+ */
 
-export interface UserStats {
-  totalUsers: number;
-  premiumUsers: number;
-  proUsers: number;
-  basicUsers: number;
-  totalRevenue: number;
-  revenueByPlan: {
-    basic: number;
-    pro: number;
-    premium: number;
-  };
-  subscriptionCounts: {
-    active: number;
-    inactive: number;
-    canceled: number;
-    trialing: number;
-  };
-  usageStats: {
-    prompt: number;
-    scan: number;
-    read: number;
-    image: number;
-    video: number;
-  };
+import { supabase, User, Plan, UsageLog } from '../supabase'
+
+// ============================================================
+// USERS
+// ============================================================
+
+export async function getUser(userId: string) {
+  const { data, error } = await supabase
+    .from('users')
+    .select('*')
+    .eq('id', userId)
+    .single()
+
+  if (error) throw error
+  return data as User
 }
 
-export interface PlanConfig {
-  id: string;
-  name: string;
-  price: number;
-  credits: number;
-  features: string[];
-  stripePriceId?: string;
+export async function getUserByEmail(email: string) {
+  const { data, error } = await supabase
+    .from('users')
+    .select('*')
+    .eq('email', email)
+    .single()
+
+  if (error) throw error
+  return data as User
 }
 
-export interface CreditPackageConfig {
-  id: string;
-  amount: number;
-  price: number;
-  updatedAt: string;
+export async function createUser(userData: {
+  auth_id: string
+  email: string
+  display_name?: string
+  plan?: string
+  credits?: number
+}) {
+  const { data, error } = await supabase
+    .from('users')
+    .insert([userData])
+    .select()
+    .single()
+
+  if (error) throw error
+  return data as User
 }
 
-export const adminService = {
-  async getStats(): Promise<UserStats> {
-    try {
-      const usersSnap = await getDocs(collection(db, 'users'));
-      const stats: UserStats = {
-        totalUsers: usersSnap.size,
-        premiumUsers: 0,
-        proUsers: 0,
-        basicUsers: 0,
-        totalRevenue: 0,
-        revenueByPlan: { basic: 0, pro: 0, premium: 0 },
-        subscriptionCounts: { active: 0, inactive: 0, canceled: 0, trialing: 0 },
-        usageStats: { prompt: 0, scan: 0, read: 0, image: 0, video: 0 }
-      };
+export async function updateUser(userId: string, updates: Partial<User>) {
+  const { data, error } = await supabase
+    .from('users')
+    .update({
+      ...updates,
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', userId)
+    .select()
+    .single()
 
-      const usageSnap = await getDocs(collection(db, 'usage_logs'));
-      usageSnap.forEach(doc => {
-        const type = doc.data().type as keyof typeof stats.usageStats;
-        if (stats.usageStats[type] !== undefined) {
-          stats.usageStats[type]++;
-        }
-      });
+  if (error) throw error
+  return data as User
+}
 
-      const plansSnap = await getDocs(collection(db, 'plans'));
-      const planPrices: Record<string, number> = {};
-      plansSnap.forEach(doc => {
-        planPrices[doc.id] = doc.data().price;
-      });
+export async function updateUserPlan(userId: string, newPlan: string) {
+  return updateUser(userId, { plan: newPlan as any })
+}
 
-      usersSnap.forEach(doc => {
-        const data = doc.data();
-        // Plan counts
-        if (data.plan === 'premium') stats.premiumUsers++;
-        else if (data.plan === 'pro') stats.proUsers++;
-        else stats.basicUsers++;
+export async function updateUserCredits(userId: string, newCredits: number) {
+  return updateUser(userId, { credits: newCredits })
+}
 
-        // Subscription status counts
-        const status = data.subscriptionStatus || 'inactive';
-        if (status === 'active') stats.subscriptionCounts.active++;
-        else if (status === 'canceled') stats.subscriptionCounts.canceled++;
-        else if (status === 'trialing') stats.subscriptionCounts.trialing++;
-        else stats.subscriptionCounts.inactive++;
+export async function updateUserMonthlySpent(userId: string, amount: number) {
+  return updateUser(userId, { monthly_spent: amount })
+}
 
-        // Revenue calculation
-        if (status === 'active') {
-          const price = planPrices[data.plan] || 0;
-          stats.totalRevenue += price;
-          if (data.plan === 'premium') stats.revenueByPlan.premium += price;
-          else if (data.plan === 'pro') stats.revenueByPlan.pro += price;
-          else stats.revenueByPlan.basic += price;
-        }
-      });
+// ============================================================
+// PLANS
+// ============================================================
 
-      return stats;
-    } catch (error) {
-      handleFirestoreError(error, OperationType.LIST, 'users/stats');
-      throw error;
-    }
-  },
+export async function getPlans() {
+  const { data, error } = await supabase
+    .from('plans')
+    .select('*')
+    .order('price', { ascending: true })
 
-  async getAllUsers(limitCount = 50) {
-    try {
-      const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'), limit(limitCount));
-      const snap = await getDocs(q);
-      return snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    } catch (error) {
-      handleFirestoreError(error, OperationType.LIST, 'users');
-      throw error;
-    }
-  },
+  if (error) throw error
+  return data as Plan[]
+}
 
-  async createUser(userData: {
-    email: string;
-    displayName: string;
-    plan: string;
-    credits: number;
-    role: string;
-    subscriptionStatus: string;
-  }) {
-    try {
-      const userId = userData.email.replace(/[^a-zA-Z0-9]/g, '_') + '_' + Date.now();
-      const now = Timestamp.now();
-      const nextMonth = new Date();
-      nextMonth.setMonth(nextMonth.getMonth() + 1);
-      nextMonth.setDate(1);
-      nextMonth.setHours(0, 0, 0, 0);
+export async function getPlanByName(name: string) {
+  const { data, error } = await supabase
+    .from('plans')
+    .select('*')
+    .eq('name', name)
+    .single()
 
-      await setDoc(doc(db, 'users', userId), {
-        ...userData,
-        uid: userId,
-        createdAt: now,
-        updatedAt: now,
-        monthlySpent: 0,
-        monthlyLimit: userData.plan === 'premium' ? 5000 : userData.plan === 'pro' ? 1000 : 200,
-        resetDate: Timestamp.fromDate(nextMonth)
-      });
-      return userId;
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'users');
-      throw error;
-    }
-  },
+  if (error) throw error
+  return data as Plan
+}
 
-  async updateUserPlan(userId: string, plan: string, credits: number, subscriptionStatus: string) {
-    try {
-      await updateDoc(doc(db, 'users', userId), {
-        plan,
-        credits,
-        subscriptionStatus: subscriptionStatus || 'inactive',
-        updatedAt: Timestamp.now()
-      });
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `users/${userId}`);
-      throw error;
-    }
-  },
+// ============================================================
+// USAGE LOGS
+// ============================================================
 
-  async getPlans(): Promise<PlanConfig[]> {
-    try {
-      const snap = await getDocs(collection(db, 'plans'));
-      return snap.docs.map(doc => ({ id: doc.id, ...doc.data() } as PlanConfig));
-    } catch (error) {
-      handleFirestoreError(error, OperationType.LIST, 'plans');
-      throw error;
-    }
-  },
+export async function getUsageLogs(userId: string, limit: number = 100) {
+  const { data, error } = await supabase
+    .from('usage_logs')
+    .select('*')
+    .eq('user_id', userId)
+    .order('timestamp', { ascending: false })
+    .limit(limit)
 
-  async getCreditPackage(): Promise<CreditPackageConfig> {
-    try {
-      const docRef = doc(db, 'config', 'credit_package');
-      const snap = await getDoc(docRef);
-      if (snap.exists()) {
-        return { id: snap.id, ...snap.data() } as CreditPackageConfig;
-      }
-      // Default if not exists
-      const defaultConfig = {
-        amount: 1000,
-        price: 99.00,
-        updatedAt: new Date().toISOString()
-      };
-      await setDoc(docRef, defaultConfig);
-      return { id: 'credit_package', ...defaultConfig };
-    } catch (error) {
-      handleFirestoreError(error, OperationType.GET, 'config/credit_package');
-      throw error;
-    }
-  },
+  if (error) throw error
+  return data as UsageLog[]
+}
 
-  async updateCreditPackage(amount: number, price: number) {
-    try {
-      await updateDoc(doc(db, 'config', 'credit_package'), {
-        amount,
-        price,
-        updatedAt: Timestamp.now()
-      });
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, 'config/credit_package');
-      throw error;
-    }
-  },
+export async function logUsage(
+  userId: string,
+  type: 'prompt' | 'scan' | 'read' | 'image' | 'video',
+  model?: string
+) {
+  const { data, error } = await supabase
+    .from('usage_logs')
+    .insert([{
+      user_id: userId,
+      type,
+      model,
+      timestamp: new Date().toISOString()
+    }])
+    .select()
+    .single()
 
-  async updatePlan(planId: string, price: number, credits: number) {
-    try {
-      await updateDoc(doc(db, 'plans', planId), {
-        price,
-        credits,
-        updatedAt: Timestamp.now()
-      });
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `plans/${planId}`);
-      throw error;
-    }
-  },
+  if (error) throw error
+  return data as UsageLog
+}
 
-  async deleteUser(userId: string) {
-    try {
-      await deleteDoc(doc(db, 'users', userId));
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `users/${userId}`);
-      throw error;
-    }
-  },
+// ============================================================
+// CONFIG
+// ============================================================
 
-  async bootstrapPlans() {
-    const plans = [
-      { id: 'basic', name: 'Básico', price: 89.99, credits: 200, features: ['Geração de Prompts', 'Visualização de Imagens', '200 Créditos'] },
-      { id: 'pro', name: 'Profissional', price: 159.99, credits: 1000, features: ['Tudo no Básico', '1.000 Créditos', 'Geração de Imagens', 'Suporte Prioritário'] },
-      { id: 'premium', name: 'Premium', price: 199.99, credits: 5000, features: ['Tudo no Pro', '5.000 Créditos', 'Geração de Vídeos', 'Acesso Antecipado'] }
-    ];
+export async function getAppConfig(key: string) {
+  const { data, error } = await supabase
+    .from('app_config')
+    .select('*')
+    .eq('key', key)
+    .single()
 
-    for (const plan of plans) {
-      await setDoc(doc(db, 'plans', plan.id), {
-        ...plan,
-        updatedAt: Timestamp.now()
-      }, { merge: true });
-    }
+  if (error) throw error
+  return data
+}
+
+export async function getAllConfigs() {
+  const { data, error } = await supabase
+    .from('app_config')
+    .select('*')
+
+  if (error) throw error
+  return data
+}
+
+export async function updateAppConfig(key: string, value: Record<string, any>) {
+  const { data, error } = await supabase
+    .from('app_config')
+    .upsert({
+      key,
+      value,
+      updated_at: new Date().toISOString()
+    })
+    .select()
+    .single()
+
+  if (error) throw error
+  return data
+}
+
+// ============================================================
+// ADMIN HELPERS
+// ============================================================
+
+export async function getAllUsers(limit: number = 100) {
+  const { data, error } = await supabase
+    .from('users')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(limit)
+
+  if (error) throw error
+  return data as User[]
+}
+
+export async function getUserStatistics(userId: string) {
+  const user = await getUser(userId)
+
+  const { count: generationCount } = await supabase
+    .from('image_generations')
+    .select('*', { count: 'exact' })
+    .eq('user_id', userId)
+
+  const { count: projectCount } = await supabase
+    .from('projects')
+    .select('*', { count: 'exact' })
+    .eq('user_id', userId)
+
+  return {
+    user,
+    generationCount: generationCount || 0,
+    projectCount: projectCount || 0,
+    creditsRemaining: user.credits,
+    monthlySpent: user.monthly_spent
   }
-};
+}
+
+export async function deleteUser(userId: string) {
+  // Deletar usuário (isso vai em cascata deletar projetos, gerações, etc)
+  const { error } = await supabase
+    .from('users')
+    .delete()
+    .eq('id', userId)
+
+  if (error) throw error
+}
+
+export default {
+  getUser,
+  getUserByEmail,
+  createUser,
+  updateUser,
+  updateUserPlan,
+  updateUserCredits,
+  updateUserMonthlySpent,
+  getPlans,
+  getPlanByName,
+  getUsageLogs,
+  logUsage,
+  getAppConfig,
+  getAllConfigs,
+  updateAppConfig,
+  getAllUsers,
+  getUserStatistics,
+  deleteUser
+}

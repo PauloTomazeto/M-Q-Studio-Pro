@@ -1,153 +1,153 @@
-import { useState, useEffect } from 'react';
-import { db, auth, handleFirestoreError, OperationType } from '../firebase';
-import { doc, onSnapshot, updateDoc, increment, setDoc, getDoc } from 'firebase/firestore';
+/**
+ * useCredits Hook - Real-time Credit Balance
+ * Subscriptions em tempo real ao saldo de créditos
+ *
+ * Substitui: src/hooks/useCredits.ts
+ */
 
-import { useStudioStore } from '../store/studioStore';
+import { useEffect, useState, useCallback } from 'react'
+import { supabase, getCurrentUser } from '../supabase'
+import * as creditsService from '../services/creditsService'
 
-export const useCredits = () => {
-  const [credits, setCredits] = useState<number | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [userProfile, setUserProfile] = useState<any>(null);
-  const { setUserCredits, setUserPlan } = useStudioStore();
+export interface UserCredits {
+  user_id: string
+  credits_available: number
+  credits_used_this_month: number
+  monthly_limit: number
+  is_admin: boolean
+  last_updated: string
+}
+
+interface UseCreditReturns {
+  credits: UserCredits | null
+  loading: boolean
+  error: Error | null
+  refetch: () => Promise<void>
+  debit: (amount: number, reason: string) => Promise<boolean>
+  credit: (amount: number, reason: string) => Promise<boolean>
+  hasEnough: (amount: number) => boolean
+}
+
+export function useCredits(): UseCreditReturns {
+  const [credits, setCredits] = useState<UserCredits | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<Error | null>(null)
+
+  const fetchCredits = useCallback(async () => {
+    try {
+      setLoading(true)
+      const user = await getCurrentUser()
+
+      if (!user) {
+        setCredits(null)
+        return
+      }
+
+      const userCredits = await creditsService.getUserCredits(user.id)
+
+      setCredits({
+        user_id: user.id,
+        credits_available: userCredits.credits_available || 0,
+        credits_used_this_month: userCredits.credits_used_this_month || 0,
+        monthly_limit: userCredits.monthly_limit || 100,
+        is_admin: userCredits.is_admin || false,
+        last_updated: new Date().toISOString()
+      })
+      setError(null)
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error('Failed to fetch credits')
+      setError(error)
+      setCredits(null)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
 
   useEffect(() => {
-    if (!auth.currentUser) return;
+    // Fetch initial credits
+    fetchCredits()
 
-    const userRef = doc(db, 'users', auth.currentUser.uid);
-    const isAdminEmail = auth.currentUser.email === 'paulosilvatomazeto@gmail.com';
-    
-    const unsubscribe = onSnapshot(userRef, (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        
-        // Force admin privileges if email matches
-        if (isAdminEmail && (data.plan !== 'premium' || data.role !== 'admin' || data.credits < 900000)) {
-          updateDoc(userRef, { 
-            plan: 'premium', 
-            role: 'admin', 
-            credits: 999999,
-            monthlyLimit: 999999 
-          }).catch(console.error);
+    // Subscribe to real-time updates
+    const user = getCurrentUser()
+    if (!user) return
+
+    const subscription = supabase
+      .channel('user-credits')
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'users',
+          filter: `id=eq.${user.id}`
+        },
+        () => {
+          fetchCredits()
+        }
+      )
+      .subscribe()
+
+    return () => {
+      subscription.unsubscribe()
+    }
+  }, [fetchCredits])
+
+  const debit = useCallback(
+    async (amount: number, reason: string): Promise<boolean> => {
+      try {
+        const user = await getCurrentUser()
+        if (!user) return false
+
+        // Check if user has enough credits
+        if (!creditsService.hasEnoughCredits(user.id, amount)) {
+          throw new Error('Insufficient credits')
         }
 
-        const currentCredits = isAdminEmail ? 999999 : data.credits;
-        setCredits(currentCredits);
-        setUserProfile(isAdminEmail ? { ...data, plan: 'premium', role: 'admin', credits: 999999 } : data);
-        
-        // Sync with Studio Store
-        setUserPlan(data.plan);
-        setUserCredits({ 
-          image: currentCredits, 
-          video: data.videoCredits || 0, 
-          proImage: data.proCredits || 0 
-        });
-      } else {
-        // Initialize user if not exists
-        const initialData = {
-          uid: auth.currentUser!.uid,
-          email: auth.currentUser!.email,
-          displayName: auth.currentUser!.displayName,
-          photoURL: auth.currentUser!.photoURL,
-          role: isAdminEmail ? 'admin' : 'user',
-          plan: isAdminEmail ? 'premium' : 'basic',
-          credits: isAdminEmail ? 999999 : 100,
-          monthlySpent: 0,
-          monthlyLimit: isAdminEmail ? 999999 : 100,
-          resetDate: new Date().toISOString(),
-          createdAt: new Date().toISOString(),
-          defaultMode: null,
-          lastUsedMode: null,
-          lastModeSelectedAt: null,
-          modeHistory: [],
-        };
-        setDoc(userRef, initialData).catch(err => {
-          try {
-            handleFirestoreError(err, OperationType.CREATE, 'users');
-          } catch (e) {
-            console.error(e);
-          }
-        });
+        await creditsService.debitCreditsRPC(user.id, amount, reason)
+        await fetchCredits()
+        return true
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error('Failed to debit credits')
+        setError(error)
+        return false
       }
-      setLoading(false);
-    }, (error) => {
+    },
+    [fetchCredits]
+  )
+
+  const credit = useCallback(
+    async (amount: number, reason: string): Promise<boolean> => {
       try {
-        handleFirestoreError(error, OperationType.GET, 'users');
-      } catch (e) {
-        console.error(e);
+        const user = await getCurrentUser()
+        if (!user) return false
+
+        await creditsService.creditCreditsRPC(user.id, amount, reason)
+        await fetchCredits()
+        return true
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error('Failed to credit credits')
+        setError(error)
+        return false
       }
-      setLoading(false);
-    });
+    },
+    [fetchCredits]
+  )
 
-    return () => unsubscribe();
-  }, [auth.currentUser]);
+  const hasEnough = useCallback(
+    (amount: number): boolean => {
+      if (!credits) return false
+      return credits.credits_available >= amount
+    },
+    [credits]
+  )
 
-  const updatePreferences = async (params: any) => {
-    if (!auth.currentUser) return;
-    const userRef = doc(db, 'users', auth.currentUser.uid);
-    try {
-      await updateDoc(userRef, params);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, 'users');
-    }
-  };
-
-  const logModeSelection = async (mode: 'prompt' | 'move') => {
-    if (!auth.currentUser) return;
-    const userRef = doc(db, 'users', auth.currentUser.uid);
-    const timestamp = new Date().toISOString();
-    
-    try {
-      const historyEntry = { mode, timestamp };
-      const currentHistory = userProfile?.modeHistory || [];
-      const newHistory = [historyEntry, ...currentHistory].slice(0, 50); // Keep last 50
-
-      await updateDoc(userRef, {
-        lastUsedMode: mode,
-        lastModeSelectedAt: timestamp,
-        modeHistory: newHistory
-      });
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, 'users');
-    }
-  };
-
-  const consumeCredits = async (amount: number, reason: string) => {
-    if (!auth.currentUser) return false;
-    
-    const isAdminEmail = auth.currentUser.email === 'paulosilvatomazeto@gmail.com';
-    if (isAdminEmail) return true; // Unlimited use for admin
-
-    if (credits === null || credits < amount) return false;
-
-    const userRef = doc(db, 'users', auth.currentUser.uid);
-    try {
-      await updateDoc(userRef, {
-        credits: increment(-amount),
-        monthlySpent: increment(amount),
-      });
-      return true;
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, 'users');
-      return false;
-    }
-  };
-
-  const refundCredits = async (amount: number, reason: string) => {
-    if (!auth.currentUser) return;
-    
-    const isAdminEmail = auth.currentUser.email === 'paulosilvatomazeto@gmail.com';
-    if (isAdminEmail) return; // No need to refund for admin
-
-    const userRef = doc(db, 'users', auth.currentUser.uid);
-    try {
-      await updateDoc(userRef, {
-        credits: increment(amount),
-        monthlySpent: increment(-amount),
-      });
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, 'users');
-    }
-  };
-
-  return { credits, loading, userProfile, consumeCredits, refundCredits, updatePreferences, logModeSelection };
-};
+  return {
+    credits,
+    loading,
+    error,
+    refetch: fetchCredits,
+    debit,
+    credit,
+    hasEnough
+  }
+}

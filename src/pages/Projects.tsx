@@ -7,7 +7,8 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { db, auth } from '../firebase';
-import { collection, query, where, orderBy, onSnapshot, doc, deleteDoc } from 'firebase/firestore';
+// Migrated to Supabase - import here will be replaced in next refactor
+// import { collection, query, where, orderBy, onSnapshot, doc, deleteDoc } from 'firebase/firestore'; // Migrated to Supabase
 import { useStudioStore } from '../store/studioStore';
 
 const Projects: React.FC = () => {

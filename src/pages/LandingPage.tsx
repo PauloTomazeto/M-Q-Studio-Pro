@@ -2,7 +2,7 @@ import React from 'react';
 import { motion } from 'framer-motion';
 import { LogIn, ArrowRight, CheckCircle2, Sparkles, Camera, Layout as LayoutIcon } from 'lucide-react';
 import { auth, googleProvider } from '../firebase';
-import { signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
+// import { signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
 import { AnimatePresence } from 'framer-motion';
 
 const LandingPage: React.FC = () => {

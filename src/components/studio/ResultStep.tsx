@@ -1,10 +1,10 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useStudioStore } from '../../store/studioStore';
-import { kieService } from '../../services/kieService';
+import kieService from '../../services/kieService';
 import { useCredits } from '../../hooks/useCredits';
 import { uploadTempImage, compressImage } from '../../services/storageService';
 import { auth, db, handleFirestoreError, OperationType } from '../../firebase';
-import { doc, updateDoc, onSnapshot } from 'firebase/firestore';
+// import { doc, updateDoc, onSnapshot } from 'firebase/firestore'; // Migrated to Supabase
 import { 
   Loader2, Copy, Check, Edit3, Wand2, ArrowRight, Star, RotateCcw,
   Save, X
@@ -112,7 +112,7 @@ const ResultStep: React.FC = () => {
     
     setIsSavingProject(true);
     try {
-      const { addDoc, collection } = await import('firebase/firestore');
+      // TODO: Migrate to Supabase - const { } = await import('//firebase/firestore');
       const projectData = {
         name: finalName,
         prompt: activePrompt,

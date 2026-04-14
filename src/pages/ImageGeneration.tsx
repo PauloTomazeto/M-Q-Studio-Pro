@@ -7,10 +7,11 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { db, auth } from '../firebase';
-import { collection, query, where, orderBy, onSnapshot, doc, updateDoc } from 'firebase/firestore';
-import { kieService } from '../services/kieService';
+// Migrated to Supabase
+// import { collection, query, where, orderBy, onSnapshot, doc, updateDoc } from 'firebase/firestore'; // Migrated to Supabase
+import kieService from '../services/kieService';
 import { useCredits } from '../hooks/useCredits';
-import { uploadTempImage, compressImage } from '../services/storageService';
+// import { uploadTempImage, compressImage } from '../services/storageService';
 import confetti from 'canvas-confetti';
 import { useLocation } from 'react-router-dom';
 import { useStudioStore } from '../store/studioStore';
@@ -245,17 +246,18 @@ const ImageGeneration: React.FC = () => {
             });
 
             // Update project with the new generated image
-            const { arrayUnion } = await import('firebase/firestore');
-            updateDoc(doc(db, 'projects', selectedProject.id), {
-              lastResultUrl: status.resultUrl,
-              generatedImages: arrayUnion({
-                url: status.resultUrl,
-                createdAt: new Date().toISOString(),
-                resolution: selectedResolution,
-                aspectRatio: selectedAspectRatio
-              }),
-              updatedAt: new Date().toISOString()
-            }).catch(console.error);
+            // TODO: Migrate to Supabase service
+            // // TODO: Migrate to Supabase - const { } = await import('//firebase/firestore');
+            // updateDoc(doc(db, 'projects', selectedProject.id), {
+            //   lastResultUrl: status.resultUrl,
+            //   generatedImages: arrayUnion({
+            //     url: status.resultUrl,
+            //     createdAt: new Date().toISOString(),
+            //     resolution: selectedResolution,
+            //     aspectRatio: selectedAspectRatio
+            //   }),
+            //   updatedAt: new Date().toISOString()
+            // }).catch(console.error);
 
             const confetti = (await import('canvas-confetti')).default;
             confetti({

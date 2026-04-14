@@ -3,9 +3,9 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Check, Zap, Crown, Sparkles, ArrowRight, Camera, Video, Layout as LayoutIcon, Loader2, Coins, Plus } from 'lucide-react';
 import { useStudioStore } from '../store/studioStore';
 import { useNavigate } from 'react-router-dom';
-import { adminService, PlanConfig, CreditPackageConfig } from '../services/adminService';
+// import { adminService TODO
 import { auth, db } from '../firebase';
-import { doc, updateDoc, increment } from 'firebase/firestore';
+// import { doc, updateDoc, increment } from 'firebase/firestore'; // Migrated to Supabase
 import confetti from 'canvas-confetti';
 
 const PricingPage: React.FC = () => {
