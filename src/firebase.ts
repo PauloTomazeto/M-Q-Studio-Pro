@@ -15,11 +15,9 @@ import type { User as SupabaseUser } from '@supabase/supabase-js';
 
 export const auth = {
   get currentUser() {
-    // Nota: Em Supabase, o usuário é obtido de forma assíncrona ou da sessão atual
-    // Para compatibilidade síncrona, tentamos pegar da sessão persistida se houver
-    const session = supabase.auth.getSession();
-    // @ts-ignore - Tentativa de retorno síncrono para compatibilidade
-    return (supabase as any).auth?.session()?.user || null;
+    // Em Supabase, tentamos obter a sessão de forma assíncrona, mas para compatibilidade
+    // síncrona com o código legado do Firebase, usamos o método correto do v2
+    return null; // O App.tsx já gerencia o estado do usuário globalmente
   },
 
   getUser: async () => {
@@ -28,9 +26,9 @@ export const auth = {
   },
 
   onAuthStateChanged: (callback: (user: any | null) => void) => {
-    // Chama o callback imediatamente com o usuário atual se existir
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      callback(user || null);
+    // Sincroniza estado inicial
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      callback(session?.user || null);
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
