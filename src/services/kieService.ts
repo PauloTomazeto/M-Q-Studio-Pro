@@ -3,13 +3,14 @@ import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
 import { db, auth } from '../firebase';
 import { usageService } from './usageService';
-import { 
-  doc, 
-  setDoc, 
-  updateDoc, 
-  getDoc, 
-  runTransaction, 
-  collection, 
+import { normalizeVisionResponse } from '../validation/response-normalizer';
+import {
+  doc,
+  setDoc,
+  updateDoc,
+  getDoc,
+  runTransaction,
+  collection,
   serverTimestamp,
   increment
 } from 'firebase/firestore';
@@ -367,12 +368,22 @@ Generate a complete ScanResult JSON object with 100% technical accuracy across 8
   - Elemento and Acabamento (technical description in Brazilian Portuguese).
   - Location_reference: A short reference of where the material was found in the image (e.g., "Parede ao fundo", "Piso central", "Móvel à esquerda").
   - Reflectancia: matte, semi-matte, semi-gloss, gloss, espelhado.
-  - pbr_diffuse: { description, color_hex, color_rgb: { r, g, b }, saturation, brightness, texture_type, texture_scale }
-  - pbr_reflection: { intensity, fresnel_at_0, fresnel_at_90 }
-  - pbr_glossiness: { value, microfacet_distribution }
-  - pbr_bump: { intensity, normal_map_type }
-  - pbr_light_behavior: description of how the material interacts with light
-- Use technical terms like "carvalho escovado", "travertino polido", "alumínio anodizado".
+  - pbr_diffuse: MUST BE AN OBJECT with { description, color_hex, color_rgb: { r, g, b }, saturation, brightness, texture_type, texture_scale }
+  - pbr_reflection: MUST BE AN OBJECT with { intensity, fresnel_at_0, fresnel_at_90 }
+  - pbr_glossiness: MUST BE AN OBJECT with { value, microfacet_distribution }
+  - pbr_bump: MUST BE AN OBJECT with { intensity, normal_map_type }
+  - pbr_light_behavior: MUST BE AN OBJECT describing how the material interacts with light
+
+[CRITICAL: PBR FIELD FORMAT]
+ALWAYS return PBR fields as NATIVE JSON OBJECTS in the JSON response.
+❌ DO NOT SERIALIZE TO STRING: "pbr_diffuse": "{\"description\": \"...\", \"color_hex\": \"#8A674A\"}"
+✅ ALWAYS RETURN AS OBJECT: "pbr_diffuse": { "description": "...", "color_hex": "#8A674A", "color_rgb": { "r": 138, "g": 103, "b": 74 } }
+
+SAME RULE FOR color_rgb IN LIGHT POINTS:
+❌ WRONG: "color_rgb": "{\"r\":255, \"g\":250, \"b\":242}"
+✅ CORRECT: "color_rgb": { "r": 255, "g": 250, "b": 242 }
+
+Use technical terms like "carvalho escovado", "travertino polido", "alumínio anodizado".
 
 [TOOL-CAMERA: PHOTOGRAPHIC PARAMETERS]
 - Analyze the image to extract precise camera parameters.
@@ -732,14 +743,18 @@ export const kieService = {
 
       console.log('AI Response Content Length:', content.length);
       const rawJson = parseJsonResponse(content);
-      
-      // 2.5 Normalize diagnosis response (IA may return strings instead of objects)
+
+      // 2.5 Apply dual normalization: existing + new Vision API double-serialization fix
       console.log('Normalizing AI response structure...');
       const normalizedJson = normalizeDiagnosisResponse(rawJson);
-      
+
+      // 2.6 Apply Vision API double-serialization fix (handles color_rgb and PBR fields as JSON strings)
+      console.log('Applying Vision API double-serialization fix...');
+      const finalNormalizedJson = normalizeVisionResponse(normalizedJson);
+
       // 3. Validate with Zod
       console.log('Validating AI response with Zod...');
-      const validatedData = ScanResultSchema.parse(normalizedJson);
+      const validatedData = ScanResultSchema.parse(finalNormalizedJson);
       
       const durationMs = Date.now() - startTime;
       console.log(`Diagnosis completed in ${durationMs}ms`);
@@ -1097,14 +1112,29 @@ Formato de saída: ${mode === 'single' ? 'Texto plano com JSON de análise ao fi
                   items: {
                     type: 'object',
                     properties: {
-                      type: { type: 'string' },
-                      content: { type: 'string' }
-                    }
+                      block_type: { type: 'string' },
+                      title: { type: 'string' },
+                      content: { type: 'string' },
+                      word_count: { type: 'number' },
+                      engine_recommendation: { type: 'string' },
+                      quality_score: { type: 'number' },
+                      quality_breakdown: { type: 'object' }
+                    },
+                    required: ['block_type', 'title', 'content', 'word_count', 'quality_score']
                   }
                 },
                 overall_quality_score: { type: 'number' },
-                quality_breakdown: { type: 'object' }
-              }
+                overall_quality_breakdown: {
+                  type: 'object',
+                  properties: {
+                    clarity: { type: 'number' },
+                    specificity: { type: 'number' },
+                    coherence: { type: 'number' },
+                    brevity: { type: 'number' }
+                  }
+                }
+              },
+              required: ['blocks', 'overall_quality_score', 'overall_quality_breakdown']
             }
           }
         }
@@ -1185,7 +1215,7 @@ Formato de saída: ${mode === 'single' ? 'Texto plano com JSON de análise ao fi
     // 2. Call KIE API
     try {
       console.log(`[KIE] Creating task for model: ${params.model}`);
-      const response = await axios.post('/api/kie/v1/nano-banana/create', {
+      const response = await axios.post('/api/kie/api/v1/jobs/createTask', {
         model: params.model,
         input: {
           prompt: params.prompt,
@@ -1225,7 +1255,7 @@ Formato de saída: ${mode === 'single' ? 'Texto plano com JSON de análise ao fi
 
   async getTaskStatus(taskId: string, generationId?: string) {
     console.log(`[KIE] Checking status for task: ${taskId}`);
-    const response = await axios.get(`/api/kie/v1/nano-banana/status/${taskId}`);
+    const response = await axios.get(`/api/kie/api/v1/jobs/getTask/${taskId}`);
     const data = response.data;
     
     if (data.code !== 200 && data.code !== 100) {
