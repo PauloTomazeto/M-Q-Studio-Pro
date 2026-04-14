@@ -3,7 +3,7 @@ import { useStudioStore } from '../../store/studioStore';
 import kieService from '../../services/kieService';
 import { useCredits } from '../../hooks/useCredits';
 import { uploadTempImage, compressImage } from '../../services/storageService';
-import { auth, db, handleFirestoreError, OperationType } from '../../firebase';
+import { supabase } from '../../supabase';
 // import { doc, updateDoc, onSnapshot } from 'firebase/firestore'; // Migrated to Supabase
 import { 
   Loader2, Copy, Check, Edit3, Wand2, ArrowRight, Star, RotateCcw,

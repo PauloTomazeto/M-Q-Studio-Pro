@@ -1,8 +1,7 @@
 import React from 'react';
 import { motion } from 'framer-motion';
 import { LogIn, ArrowRight, CheckCircle2, Sparkles, Camera, Layout as LayoutIcon } from 'lucide-react';
-import { auth, googleProvider, signInWithPopup } from '../firebase';
-// import { signInWithPopup, GoogleAuthProvider } from 'firebase/auth';
+import { supabase } from '../supabase';
 import { AnimatePresence } from 'framer-motion';
 
 const LandingPage: React.FC = () => {
@@ -11,16 +10,16 @@ const LandingPage: React.FC = () => {
   const handleLogin = async () => {
     try {
       setError(null);
-      await signInWithPopup(auth, googleProvider);
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: window.location.origin
+        }
+      });
+      if (error) throw error;
     } catch (err: any) {
       console.error("Login error:", err);
-      if (err.code === 'auth/popup-blocked') {
-        setError("O popup de login foi bloqueado pelo seu navegador. Por favor, permita popups para este site.");
-      } else if (err.code === 'auth/cancelled-popup-request') {
-        // User closed the popup, no need to show error
-      } else {
-        setError("Ocorreu um erro ao tentar entrar com o Google. Por favor, tente novamente.");
-      }
+      setError("Ocorreu um erro ao tentar entrar com o Google. Por favor, tente novamente.");
     }
   };
 

@@ -16,7 +16,7 @@ import { useCredits } from '../hooks/useCredits';
 import { useStudioStore } from '../store/studioStore';
 import { useHistory } from '../hooks/useHistory';
 import ModeSelection from '../components/studio/ModeSelection';
-import { auth } from '../firebase';
+import { supabase } from '../supabase';
 
 const Dashboard: React.FC = () => {
   const navigate = useNavigate();
@@ -24,6 +24,13 @@ const Dashboard: React.FC = () => {
   const { mode, setMode, userPlan, userCredits } = useStudioStore();
   const { history, loading: historyLoading } = useHistory(5);
   const [showModeSelection, setShowModeSelection] = useState(false);
+  const [currentUser, setCurrentUser] = useState<any>(null);
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      setCurrentUser(user);
+    });
+  }, []);
 
   useEffect(() => {
     if (creditsLoading) return;

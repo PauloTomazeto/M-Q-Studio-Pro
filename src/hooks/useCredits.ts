@@ -47,10 +47,10 @@ export function useCredits(): UseCreditReturns {
 
       setCredits({
         user_id: user.id,
-        credits_available: userCredits.credits_available || 0,
-        credits_used_this_month: userCredits.credits_used_this_month || 0,
-        monthly_limit: userCredits.monthly_limit || 100,
-        is_admin: userCredits.is_admin || false,
+        credits_available: userCredits.credits || 0,
+        credits_used_this_month: userCredits.monthlySpent || 0,
+        monthly_limit: userCredits.monthlyLimit || 100,
+        is_admin: false, // Pode ser inferido de outro lugar se necessário
         last_updated: new Date().toISOString()
       })
       setError(null)

@@ -12,13 +12,17 @@ import { supabase, User, Plan, UsageLog } from '../supabase'
 // ============================================================
 
 export async function getUser(userId: string) {
+  // Tenta buscar por id (UUID interno) ou auth_id (UUID do Auth)
   const { data, error } = await supabase
     .from('users')
     .select('*')
-    .eq('id', userId)
-    .single()
+    .or(`id.eq.${userId},auth_id.eq.${userId}`)
+    .maybeSingle()
 
-  if (error) throw error
+  if (error) {
+    console.error("Error fetching user:", error);
+    return null;
+  }
   return data as User
 }
 

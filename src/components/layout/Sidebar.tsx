@@ -14,9 +14,18 @@ import {
   Camera,
   ShieldCheck
 } from 'lucide-react';
-import { auth, isAdminEmail } from '../../firebase';
+import { supabase } from '../../supabase';
 // import { signOut } from 'firebase/auth';
 import { motion } from 'framer-motion';
+
+const ADMIN_EMAILS = [
+  "paulosilvatomazeto@gmail.com",
+  "paulo.silva.tamazeta@gmail.com"
+];
+
+const isAdminEmail = (email: string | null | undefined) => {
+  return email && ADMIN_EMAILS.includes(email);
+};
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { useStudioStore } from '../../store/studioStore';
@@ -31,7 +40,7 @@ const Sidebar: React.FC = () => {
   const navigate = useNavigate();
 
   const handleLogout = async () => {
-    await signOut(auth);
+    await supabase.auth.signOut();
     navigate('/');
   };
 

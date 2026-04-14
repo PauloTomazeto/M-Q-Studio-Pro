@@ -179,10 +179,14 @@ export async function getUserCredits(userId: string) {
   const { data, error } = await supabase
     .from('users')
     .select('credits, monthly_spent, monthly_limit')
-    .eq('id', userId)
-    .single()
+    .or(`id.eq.${userId},auth_id.eq.${userId}`)
+    .maybeSingle()
 
-  if (error) throw error
+  if (error) {
+    console.error("Error fetching credits:", error);
+    return { credits: 0, monthlySpent: 0, monthlyLimit: 0 };
+  }
+  
   return {
     credits: data?.credits || 0,
     monthlySpent: data?.monthly_spent || 0,

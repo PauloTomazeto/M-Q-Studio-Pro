@@ -4,7 +4,7 @@ import { Check, Zap, Crown, Sparkles, ArrowRight, Camera, Video, Layout as Layou
 import { useStudioStore } from '../store/studioStore';
 import { useNavigate } from 'react-router-dom';
 // import { adminService TODO
-import { auth, db } from '../firebase';
+import { supabase } from '../supabase';
 // import { doc, updateDoc, increment } from 'firebase/firestore'; // Migrated to Supabase
 import confetti from 'canvas-confetti';
 

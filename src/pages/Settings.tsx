@@ -1,10 +1,17 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { User, Shield, CreditCard, Bell, Moon, Sun, Monitor } from 'lucide-react';
-import { auth } from '../firebase';
+import { supabase } from '../supabase';
 import { useCredits } from '../hooks/useCredits';
 
 const Settings: React.FC = () => {
   const { userProfile } = useCredits();
+  const [currentUser, setCurrentUser] = useState<any>(null);
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      setCurrentUser(user);
+    });
+  }, []);
 
   const sections = [
     {
@@ -12,8 +19,8 @@ const Settings: React.FC = () => {
       title: 'Perfil',
       icon: User,
       items: [
-        { label: 'Nome', value: auth.currentUser?.displayName },
-        { label: 'Email', value: auth.currentUser?.email },
+        { label: 'Nome', value: currentUser?.user_metadata?.name || currentUser?.email?.split('@')[0] },
+        { label: 'Email', value: currentUser?.email },
         { label: 'Plano Atual', value: userProfile?.plan?.toUpperCase() },
       ]
     },

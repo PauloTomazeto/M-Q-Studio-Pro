@@ -10,7 +10,7 @@
 
 import crypto from 'crypto';
 // import { updateDoc, doc, getDoc } from 'firebase/firestore'; // Migrated to Supabase
-import { db } from '../firebase';
+import { supabase } from '../supabase';
 import { createLogger } from '../utils/logger';
 import { getSecrets } from '../config/secretsManager';
 

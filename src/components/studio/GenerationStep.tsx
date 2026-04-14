@@ -4,7 +4,7 @@ import { useCredits } from '../../hooks/useCredits';
 import kieService from '../../services/kieService';
 import { uploadTempImage, compressImage } from '../../services/storageService';
 import { imageGenerationService } from '../../services/imageGenerationService';
-import { auth, db } from '../../firebase';
+import { supabase } from '../../supabase';
 // import { doc, updateDoc, setDoc } from 'firebase/firestore'; // Migrated to Supabase
 import { 
   Loader2, Download, Share2, CheckCircle2, AlertCircle, 

@@ -27,9 +27,18 @@ import {
 } from 'lucide-react';
 // import { adminService TODO
 // import { usageService TODO
-import { auth, isAdminEmail } from '../firebase';
+import { supabase } from '../supabase';
 import { useNavigate } from 'react-router-dom';
 import { Coins } from 'lucide-react';
+
+const ADMIN_EMAILS = [
+  "paulosilvatomazeto@gmail.com",
+  "paulo.silva.tamazeta@gmail.com"
+];
+
+const isAdminEmail = (email: string | null | undefined) => {
+  return email && ADMIN_EMAILS.includes(email);
+};
 
 const AdminPage: React.FC = () => {
   const [stats, setStats] = useState<UserStats | null>(null);

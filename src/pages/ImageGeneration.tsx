@@ -6,7 +6,7 @@ import {
   Image as ImageIcon, Sparkles, Layers, Settings2, X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { db, auth } from '../firebase';
+import { supabase } from '../supabase';
 // Migrated to Supabase
 // import { collection, query, where, orderBy, onSnapshot, doc, updateDoc } from 'firebase/firestore'; // Migrated to Supabase
 import kieService from '../services/kieService';
