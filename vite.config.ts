@@ -16,9 +16,20 @@ export default defineConfig(({mode}) => {
       },
     },
     server: {
-      // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
-      hmr: process.env.DISABLE_HMR !== 'true',
+      port: 5173,
+      // HMR configuration for Hot Module Replacement
+      // If dev server is on different port or domain, update these values
+      hmr: process.env.DISABLE_HMR === 'true' ? false : {
+        host: 'localhost',
+        port: 5173,
+        protocol: 'ws'
+      },
+      // CORS and headers configuration
+      middlewareMode: false,
+      headers: {
+        'Cross-Origin-Resource-Policy': 'cross-origin',
+        // DO NOT set COEP here - it blocks resource loading
+      }
     },
   };
 });

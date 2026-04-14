@@ -10,6 +10,7 @@ import { CameraAnalysis } from './CameraAnalysis';
 import { ColorTemperaturePanel } from './ColorTemperaturePanel';
 import { Loader2, AlertCircle, CheckCircle2, ShieldCheck, Camera, Sun, Layers, RefreshCw, SkipForward, ChevronDown, ChevronUp, Zap, Thermometer, Home } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { toast } from 'sonner';
 
 const PROGRESS_MESSAGES = [
   "Iniciando diagnóstico técnico...",
@@ -27,18 +28,18 @@ const PROGRESS_MESSAGES = [
 ];
 
 const DiagnosisStep: React.FC = () => {
-  const { 
-    image, 
-    base64Image, 
-    sessionId, 
-    scanResult, 
-    setScanResult, 
-    setScanStatus, 
-    setScanErrors, 
+  const {
+    image,
+    base64Image,
+    sessionId,
+    scanResult,
+    setScanResult,
+    setScanStatus,
+    setScanErrors,
     setStep,
-    setIsModeLocked 
+    setIsModeLocked
   } = useStudioStore();
-  const { consumeCredits } = useCredits();
+  const { consumeCredits, refundCredits } = useCredits();
   const [status, setStatus] = useState<'loading' | 'success' | 'error'>(scanResult ? 'success' : 'loading');
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<any>(scanResult);
@@ -52,6 +53,7 @@ const DiagnosisStep: React.FC = () => {
   const [showVolumes, setShowVolumes] = useState(true);
   const [showOpenings, setShowOpenings] = useState(true);
   const [showStructural, setShowStructural] = useState(true);
+  const [showRedoConfirm, setShowRedoConfirm] = useState(false);
   const analysisStartedRef = useRef(!!scanResult);
   const isProcessingRef = useRef(false);
   const { materialMetrics } = useStudioStore();
@@ -106,25 +108,27 @@ const DiagnosisStep: React.FC = () => {
     try {
       // ONLY consume credits on the very first attempt
       if (retryCountRef.current === 0) {
-        console.log('[Diagnosis] Consuming credits for first attempt...');
+        console.log('[Diagnosis] Consuming 5 credits for first attempt...');
         const hasCredits = await consumeCredits(5, 'diagnosis_gemini');
         if (!hasCredits) {
           isProcessingRef.current = false;
           throw new Error('Créditos insuficientes para realizar a análise.');
         }
+        toast.success('5 créditos deducted para diagnóstico arquitetônico', { duration: 2000 });
       } else {
         console.log(`[Diagnosis] Retry attempt ${retryCountRef.current}. Skipping credit consumption.`);
       }
 
       console.log('Running diagnosis with Base64, Session:', sessionId);
       const data = await kieService.diagnoseImage(imageToAnalyze, sessionId);
-      
+
+      // Success path
       // Perform Type Detection
       const detection = detectTypeFromFeatures(data);
       const { setImageType } = useStudioStore.getState();
       setImageType(
-        detection.type, 
-        data.typology ? 'gemini_ai' : 'post_process', 
+        detection.type,
+        data.typology ? 'gemini_ai' : 'post_process',
         detection.confidence,
         detection.alternatives
       );
@@ -135,32 +139,86 @@ const DiagnosisStep: React.FC = () => {
       setIsModeLocked(false);
       isProcessingRef.current = false;
       analysisStartedRef.current = true; // Mark as finished only on success
+
+      // Show success feedback for retry
+      if (retryCountRef.current > 0) {
+        toast.success('Análise completa - sem cobranças adicionais', { duration: 2000 });
+        console.log('[Diagnosis] Retry succeeded - no additional charges');
+      }
     } catch (err: any) {
       console.error('Diagnosis Error:', err);
       isProcessingRef.current = false;
-      
-      // Retry logic for transient errors
-      const isTransient = err.message?.includes('HTML') || 
-                          err.message?.includes('JSON') || 
-                          err.message?.includes('timeout') ||
-                          err.message?.toLowerCase().includes('maintained') ||
-                          err.message?.toLowerCase().includes('maintenance');
-      
-      // We only retry ONCE for transient errors
-      if (isTransient && retryCountRef.current < 1 && elapsedTime < 60) {
+
+      // Detect server/transient errors
+      const isServerError =
+        err.message?.includes('5xx') ||
+        err.message?.includes('timeout') ||
+        err.message?.includes('HTML') ||
+        err.response?.status >= 500;
+
+      const isMaintenance = err.message?.toLowerCase().includes('maintained') ||
+        err.message?.toLowerCase().includes('maintenance') ||
+        err.message?.toLowerCase().includes('under maintenance');
+
+      const isTransient = err.message?.includes('HTML') ||
+        err.message?.includes('JSON') ||
+        err.message?.includes('timeout') ||
+        isMaintenance ||
+        err.message?.includes('KIE_API_ERROR');
+
+      // Refund if server error detected (regardless of retry count)
+      if (isServerError && retryCountRef.current === 0) {
+        const refundAmount = 5;
+        try {
+          await refundCredits(refundAmount, err.message);
+          console.log(`[Credits] Refunded ${refundAmount} for: ${err.message}`);
+          toast.info(`${refundAmount} créditos reembolsados devido a erro do servidor`, { duration: 3000 });
+        } catch (refundErr) {
+          console.error('[Credits] Failed to refund:', refundErr);
+        }
+      }
+
+      // Retry strategy: allow up to 3 attempts for transient/maintenance errors
+      const maxRetries = isMaintenance ? 2 : 1; // More retries for maintenance
+      if (isTransient && retryCountRef.current < maxRetries && elapsedTime < 120) {
         retryCountRef.current++;
-        console.log(`Retrying diagnosis (Attempt ${retryCountRef.current + 1})...`);
+        const nextAttempt = retryCountRef.current + 1;
+        console.log(`[Diagnosis] Retrying diagnosis (Attempt ${nextAttempt}/${maxRetries + 1})...`);
+
+        // Exponential backoff: 2s, 4s, 8s
+        const delayMs = 2000 * Math.pow(2, retryCountRef.current - 1);
+        console.log(`[Diagnosis] Waiting ${delayMs}ms before retry...`);
         
-        // Wait a bit before retrying
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        // Show user-friendly message
+        if (isMaintenance) {
+          toast.loading(`Serviço em manutenção. Tentativa ${nextAttempt} de ${maxRetries + 1}...`, { duration: Math.ceil(delayMs / 1000) });
+        } else {
+          toast.loading(`Tentando novamente... (${nextAttempt}/${maxRetries + 1})`, { duration: Math.ceil(delayMs / 1000) });
+        }
         
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+
         runAnalysis();
         return;
       }
 
+      // If retry also failed, refund any previous deduction
+      if (isServerError && retryCountRef.current > 0) {
+        const refundAmount = 5;
+        try {
+          await refundCredits(refundAmount, `Retry failed: ${err.message}`);
+          console.log(`[Credits] Refunded ${refundAmount} for retry failure`);
+          toast.info(`Retry falhou - ${refundAmount} créditos reembolsados`, { duration: 3000 });
+        } catch (refundErr) {
+          console.error('[Credits] Failed to refund after retry:', refundErr);
+        }
+      }
+
       let msg = err.message || 'Erro ao analisar imagem. Tente novamente.';
-      if (msg.toLowerCase().includes('maintained') || msg.toLowerCase().includes('maintenance')) {
-        msg = 'O servidor de IA está em manutenção temporária. Por favor, tente novamente em alguns minutos.';
+      if (isMaintenance) {
+        msg = `O servidor de IA está em manutenção temporária. Tente novamente em alguns minutos. (Tentativas: ${retryCountRef.current}/${maxRetries + 1})`;
+      } else if (msg.includes('ZodError')) {
+        msg = 'Erro ao processar resposta da IA. Por favor, tente com outra imagem.';
       }
       setError(msg);
       setScanErrors([msg]);
@@ -170,9 +228,22 @@ const DiagnosisStep: React.FC = () => {
   };
 
   const handleRedo = () => {
+    console.log('[Diagnosis] Redo requested - showing confirmation dialog');
+    setShowRedoConfirm(true);
+  };
+
+  const confirmRedo = async () => {
+    console.log('[Diagnosis] User confirmed redo - resetting analysis');
+    setShowRedoConfirm(false);
     analysisStartedRef.current = false;
     retryCountRef.current = 0;
+    toast.info('Redo confirmado - 5 créditos serão deducted', { duration: 2000 });
     runAnalysis();
+  };
+
+  const cancelRedo = () => {
+    console.log('[Diagnosis] User cancelled redo');
+    setShowRedoConfirm(false);
   };
 
   useEffect(() => {
@@ -427,11 +498,13 @@ const DiagnosisStep: React.FC = () => {
             </div>
             <div>
               <p className="text-xs text-neutral-500 uppercase mb-1">Período</p>
-              <p className="font-bold capitalize">{result.light.period.replace('_', ' ')}</p>
+              <p className="font-bold capitalize">
+                {result.light?.period ? result.light.period.replace('_', ' ') : 'N/A'}
+              </p>
             </div>
             <div>
               <p className="text-xs text-neutral-500 uppercase mb-1">Fonte Dominante</p>
-              <p className="font-bold">{result.light.dominant_source}</p>
+              <p className="font-bold">{result.light?.dominant_source || 'N/A'}</p>
             </div>
             {result.plantaType && (
               <div>
@@ -822,6 +895,58 @@ const DiagnosisStep: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Redo Confirmation Modal */}
+      {showRedoConfirm && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95, y: 20 }}
+            className="bg-white dark:bg-neutral-900 w-full max-w-md rounded-[2.5rem] shadow-2xl overflow-hidden border border-neutral-200 dark:border-neutral-800"
+          >
+            <div className="p-8 border-b border-neutral-100 dark:border-neutral-800 space-y-3">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 bg-warning/10 rounded-xl flex items-center justify-center text-warning">
+                  <RefreshCw size={24} />
+                </div>
+                <div>
+                  <h3 className="text-xl font-bold text-neutral-900 dark:text-white">Refazer Análise</h3>
+                  <p className="text-xs text-neutral-500">Isto irá custar 5 créditos</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-8 space-y-4">
+              <p className="text-neutral-600 dark:text-neutral-400">
+                Você tem certeza que deseja refazer a análise do diagnóstico? Isso irá consumir mais 5 créditos da sua conta.
+              </p>
+              <div className="bg-warning/5 border border-warning/20 rounded-xl p-4">
+                <p className="text-sm font-bold text-warning flex items-center gap-2">
+                  <AlertCircle size={16} />
+                  Esta ação não pode ser desfeita
+                </p>
+              </div>
+            </div>
+
+            <div className="p-8 bg-neutral-50 dark:bg-neutral-800/50 flex items-center gap-3">
+              <button
+                onClick={cancelRedo}
+                className="flex-1 px-6 py-3 rounded-xl font-bold text-neutral-600 dark:text-neutral-300 hover:bg-neutral-200 dark:hover:bg-neutral-700 transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={confirmRedo}
+                className="flex-1 px-6 py-3 rounded-xl font-bold bg-primary text-white shadow-lg shadow-primary/20 hover:bg-primary-dark transition-all active:scale-95 flex items-center justify-center gap-2"
+              >
+                <RefreshCw size={18} />
+                Sim, Refazer
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
     </div>
   );
 };

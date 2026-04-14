@@ -1181,38 +1181,18 @@ Formato de saída: ${mode === 'single' ? 'Texto plano com JSON de análise ao fi
     resolution: '1K' | '2K' | '2.5K' | '3K' | '4K';
     aspect_ratio: string;
     image_input?: string[];
-    sessionId: string;
-    creditsCost: number;
+    sessionId?: string;
+    creditsCost?: number;
   }) {
-    await usageService.logUsage('image', { 
-      model: params.model, 
+    await usageService.logUsage('image', {
+      model: params.model,
       resolution: params.resolution,
-      metadata: { sessionId: params.sessionId } 
+      metadata: { sessionId: params.sessionId }
     });
     const userId = auth.currentUser?.uid;
     if (!userId) throw new Error('AUTH_REQUIRED');
 
-    const generationId = `gen_${Date.now()}`;
-    
-    // 1. Create initial record in Firestore
-    await setDoc(doc(db, 'image_generations', generationId), {
-      id: generationId,
-      userId,
-      sessionId: params.sessionId,
-      promptContent: params.prompt,
-      generationStatus: 'queued',
-      progressPercentage: 0,
-      currentResolution: params.resolution.toLowerCase(),
-      kieApiModel: params.model,
-      creditsCost: params.creditsCost,
-      creditsDeducted: true,
-      createdAt: new Date().toISOString(),
-      isCompleted: false,
-      isPreviewReady: false,
-      retryCount: 0
-    });
-
-    // 2. Call KIE API
+    // Call KIE API
     try {
       console.log(`[KIE] Creating task for model: ${params.model}`);
       const response = await axios.post('/api/kie/api/v1/jobs/createTask', {
@@ -1225,30 +1205,19 @@ Formato de saída: ${mode === 'single' ? 'Texto plano com JSON de análise ao fi
           output_format: 'jpg'
         }
       });
-      
+
       const data = response.data;
       if (data.code !== 200) {
         throw new Error(data.msg || "Erro ao criar tarefa");
       }
-      
+
       const taskId = data.data.taskId;
       console.log(`[KIE] Task created: ${taskId}`);
 
-      // 3. Update record with taskId
-      await updateDoc(doc(db, 'image_generations', generationId), {
-        kieApiRequestId: taskId,
-        generationStatus: 'processing',
-        startedAt: new Date().toISOString()
-      });
-
-      return { taskId, generationId };
+      return { taskId };
     } catch (error: any) {
       const errorMsg = error.response?.data?.msg || error.message;
       console.error('[KIE] Generation Init Error:', errorMsg);
-      await updateDoc(doc(db, 'image_generations', generationId), {
-        generationStatus: 'failed',
-        errorMessage: errorMsg
-      });
       throw error;
     }
   },

@@ -183,8 +183,8 @@ const GenerationStep: React.FC = () => {
       if (typeof apiResponse === 'string' && apiResponse.startsWith('DIRECT_URL:')) {
         directUrl = apiResponse.replace('DIRECT_URL:', '');
         taskId = `direct_${Date.now()}`;
-      } else {
-        taskId = apiResponse;
+      } else if (typeof apiResponse === 'object' && apiResponse.taskId) {
+        taskId = apiResponse.taskId;
       }
 
       // 4. Register generation in DB (The "Banco a Banco" start point)

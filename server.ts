@@ -16,14 +16,39 @@ async function startServer() {
 
   app.use(express.json({ limit: '50mb' }));
 
-  // KIE API Proxy
+  // COOP/COEP headers to fix Firebase Auth window.closed issue
+  // Note: COEP: require-corp removed to allow Firebase Storage images to load
+  // This header was blocking image resources that don't have CORP header
+  app.use((req, res, next) => {
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+    // res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp'); // DISABLED: Blocks Firebase Storage
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    // Log confirmation that COEP is disabled
+    if (req.path === '/') {
+      console.log('[CORS Headers] COEP disabled ✓ | CORP: cross-origin ✓ | COOP: same-origin-allow-popups ✓');
+    }
+    next();
+  });
+
+  // Validate required environment variables
+  const apiKey = process.env.KIE_API_KEY;
+  if (!apiKey) {
+    throw new Error(
+      'KIE_API_KEY environment variable is required. ' +
+      'Please set it in your .env file. ' +
+      'Get your API key at: https://kie.ai/api-key'
+    );
+  }
+
+  // KIE API Proxy with improved timeout handling and logging
   app.all("/api/kie/*", async (req, res) => {
+    const startTime = Date.now();
     try {
       const subPath = req.params[0];
-      const apiKey = process.env.KIE_API_KEY || "b7e6d04e2b37c593a0f8dac63ef612e9";
       const targetUrl = `https://api.kie.ai/${subPath}`;
 
-      console.log(`Proxying ${req.method} request to KIE: ${targetUrl}`);
+      console.log(`[KIE Proxy] START ${req.method} ${subPath}`);
+      console.log(`[KIE Proxy] Body size: ${JSON.stringify(req.body).length} bytes`);
 
       const response = await axios({
         method: req.method,
@@ -38,19 +63,28 @@ async function startServer() {
         timeout: 180000 // Increased to 180s for very slow responses
       });
 
-      console.log(`KIE Response Status: ${response.status}`);
+      const duration = Date.now() - startTime;
+      console.log(`[KIE Proxy] SUCCESS ${response.status} - ${duration}ms`);
       res.status(response.status).json(response.data);
     } catch (error: any) {
-      console.error("KIE Proxy Error:", error.message);
+      const duration = Date.now() - startTime;
+      console.error(`[KIE Proxy] ERROR after ${duration}ms:`, error.message);
+      
       if (error.response) {
         const errorData = error.response.data;
         const responsePayload = typeof errorData === 'string' && errorData.includes('<!doctype html>') 
           ? { error: "KIE_API_HTML_ERROR", message: "Target API returned HTML instead of JSON", raw: errorData.substring(0, 500) }
           : errorData;
+        console.error(`[KIE Proxy] Response error:`, error.response.status, errorData);
         res.status(error.response.status).json(responsePayload);
       } else if (error.code === 'ECONNABORTED') {
-        res.status(504).json({ error: "Gateway Timeout", message: "KIE API took too long to respond (180s limit)" });
+        console.error(`[KIE Proxy] TIMEOUT after ${duration}ms`);
+        res.status(504).json({ error: "Gateway Timeout", message: "KIE API took too long to respond (180s limit)", duration });
+      } else if (error.code === 'ENOTFOUND') {
+        console.error(`[KIE Proxy] DNS error - could not find host`);
+        res.status(503).json({ error: "Service Unavailable", message: "Could not reach KIE API", code: error.code });
       } else {
+        console.error(`[KIE Proxy] Unexpected error:`, error.code, error.message);
         res.status(500).json({ error: "Internal Server Error", message: error.message, code: error.code });
       }
     }

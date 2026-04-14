@@ -210,7 +210,9 @@ const ImageGeneration: React.FC = () => {
         } catch (err) { console.error('Failed to upload mirror image:', err); }
       }
       
-      const { generationId, taskId } = await kieService.generateImage({
+      const generationId = `gen_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+      const { taskId } = await kieService.generateImage({
         prompt: selectedProject.prompt,
         model: selectedModel,
         resolution: selectedResolution as any,
@@ -219,13 +221,13 @@ const ImageGeneration: React.FC = () => {
         sessionId: selectedProject.id,
         creditsCost: cost
       });
-      
-      setGenerationTask({ 
-        generationId, 
-        status: 'processing', 
-        progress: 10, 
-        stage: 'Iniciando processamento...', 
-        resultUrl: null 
+
+      setGenerationTask({
+        generationId,
+        status: 'processing',
+        progress: 10,
+        stage: 'Iniciando processamento...',
+        resultUrl: null
       });
 
       // Iniciar polling

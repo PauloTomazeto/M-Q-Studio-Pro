@@ -62,15 +62,23 @@ export const calculateHash = async (file: File): Promise<string> => {
 
 export const getImageDimensions = (file: File): Promise<{ width: number; height: number }> => {
   return new Promise((resolve, reject) => {
+    console.log('[GetImageDimensions] START');
     const img = new Image();
-    const timeout = setTimeout(() => reject(new Error('IMAGE_DECODE_TIMEOUT')), 5000);
+    const timeout = setTimeout(() => {
+      console.error('[GetImageDimensions] TIMEOUT');
+      URL.revokeObjectURL(img.src);
+      reject(new Error('IMAGE_DECODE_TIMEOUT'));
+    }, 5000);
     img.onload = () => {
       clearTimeout(timeout);
+      console.log('[GetImageDimensions] SUCCESS:', img.width, 'x', img.height);
       resolve({ width: img.width, height: img.height });
       URL.revokeObjectURL(img.src);
     };
     img.onerror = () => {
       clearTimeout(timeout);
+      console.error('[GetImageDimensions] ERROR');
+      URL.revokeObjectURL(img.src);
       reject(new Error('CORRUPTED_FILE'));
     };
     img.src = URL.createObjectURL(file);
@@ -89,25 +97,34 @@ export const extractExif = (file: File): Promise<any> => {
 };
 
 export const compressImage = async (file: File, quality = 0.85, maxWidth = 1920): Promise<Blob> => {
-  console.log('Starting image compression...');
+  console.log(`[CompressImage] Starting with quality=${quality}, maxWidth=${maxWidth}, fileSize=${file.size}`);
   const img = new Image();
   const url = URL.createObjectURL(file);
+  const startTime = Date.now();
   
   try {
     await new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('COMPRESSION_TIMEOUT')), 10000);
+      const timeout = setTimeout(() => {
+        console.error(`[CompressImage] TIMEOUT after ${Date.now() - startTime}ms`);
+        URL.revokeObjectURL(url);
+        reject(new Error('COMPRESSION_TIMEOUT'));
+      }, 15000);
       img.onload = () => {
         clearTimeout(timeout);
+        console.log(`[CompressImage] Image loaded in ${Date.now() - startTime}ms, dimensions: ${img.width}x${img.height}`);
         resolve(null);
       };
       img.onerror = () => {
         clearTimeout(timeout);
+        console.error(`[CompressImage] Image load error after ${Date.now() - startTime}ms`);
+        URL.revokeObjectURL(url);
         reject(new Error('COMPRESSION_ERROR'));
       };
       img.src = url;
     });
   } catch (err) {
     URL.revokeObjectURL(url);
+    console.error(`[CompressImage] Error:`, err);
     throw err;
   }
 
@@ -248,18 +265,35 @@ export const validateFileChain = async (
   let confidence = 1.0;
   const step6 = await runStep(6, 'Content', async () => {
     try {
-      console.log('Starting optimized content validation...');
+      console.log('[Step6] Starting optimized content validation...');
       // Create a small thumbnail for validation to save bandwidth and time
+      console.log('[Step6] Creating thumbnail for architecture detection...');
       const thumbnail = await compressImage(file, 0.6, 512);
+      console.log('[Step6] Thumbnail created, size:', thumbnail.size);
+      
       const reader = new FileReader();
+      console.log('[Step6] Converting thumbnail to base64...');
       const base64 = await new Promise<string>((resolve, reject) => {
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = reject;
+        const timeout = setTimeout(() => {
+          console.error('[Step6] Base64 conversion TIMEOUT');
+          reject(new Error('BASE64_CONVERSION_TIMEOUT'));
+        }, 10000);
+        reader.onload = () => {
+          clearTimeout(timeout);
+          console.log('[Step6] Base64 conversion complete, size:', (reader.result as string).length);
+          resolve(reader.result as string);
+        };
+        reader.onerror = () => {
+          clearTimeout(timeout);
+          console.error('[Step6] FileReader error');
+          reject(new Error('FILEREADER_ERROR'));
+        };
         reader.readAsDataURL(thumbnail);
       });
       
+      console.log('[Step6] Calling detectArchitecture...');
       const res = await kieService.detectArchitecture(base64);
-      console.log('detectArchitecture response:', res);
+      console.log('[Step6] detectArchitecture response:', res);
       
       isArchitecture = res.isArchitecture;
       confidence = res.confidence;
@@ -286,9 +320,9 @@ export const validateFileChain = async (
     } catch (err: any) {
       const isMaintenance = err.message?.toLowerCase().includes('maintained') || err.message?.toLowerCase().includes('maintenance');
       if (isMaintenance) {
-        console.warn('Content Validation skipped: KIE API is under maintenance.');
+        console.warn('[Step6] Content Validation skipped: KIE API is under maintenance.');
       } else {
-        console.error('Content Validation Error:', err);
+        console.error('[Step6] Content Validation Error:', err.message);
       }
       // Fail-safe: if the validation service fails technically, we don't block or warn the user
       // as it might be a temporary network/service issue.

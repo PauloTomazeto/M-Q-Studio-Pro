@@ -19,11 +19,12 @@ export const GenerationPanel: React.FC = () => {
   const [linkCopied, setLinkCopied] = useState(false);
 
   // Resolution options with costs and times
+  // Note: apiValue is auto-mapped in imageGenerationService.mapResolution()
   const resolutions = [
-    { value: '2k', label: '2K (2560x1920)', cost: 5, time: '~30-40s', plan: 'basic', apiValue: '2K' },
-    { value: '2.5k', label: '2.5K (3200x2400)', cost: 8, time: '~40-60s', plan: 'pro', apiValue: '2K' },
-    { value: '3k', label: '3K (3840x2880)', cost: 12, time: '~60-80s', plan: 'pro', apiValue: '4K' },
-    { value: '4k', label: '4K (4096x3072)', cost: 20, time: '~80-120s', plan: 'pro', apiValue: '4K' }
+    { value: '2k', label: '2K (2560x1920)', cost: 5, time: '~30-40s', plan: 'basic' },
+    { value: '2.5k', label: '2.5K (3200x2400)', cost: 8, time: '~40-60s', plan: 'pro' },
+    { value: '3k', label: '3K (3840x2880)', cost: 12, time: '~60-80s', plan: 'pro' },
+    { value: '4k', label: '4K (4096x3072)', cost: 20, time: '~80-120s', plan: 'pro' }
   ];
 
   // Aspect Ratio Options
