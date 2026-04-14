@@ -32,34 +32,49 @@ const App: React.FC = () => {
   const { setUserPlan, setUserCredits } = useStudioStore();
 
   useEffect(() => {
+    console.log("Iniciando monitoramento de autenticação...");
+    
+    // Fallback de segurança: se em 10 segundos não carregar, libera o loading
+    const safetyTimer = setTimeout(() => {
+      if (loading) {
+        console.warn("Aviso: O carregamento de autenticação demorou demais. Liberando interface.");
+        setLoading(false);
+      }
+    }, 10000);
+
     const unsubscribe = supabase.auth.onAuthStateChange(async (event, authUser) => {
+      console.log("Evento de Autenticação:", event, authUser?.email);
       try {
         if (authUser) {
           // Sync user profile with Supabase
-          const userData = await adminService.getUser(authUser.id);
+          try {
+            const userData = await adminService.getUser(authUser.id);
+            if (!userData) {
+              console.log("Usuário novo detectado, criando perfil...");
+              const isAdmin = isAdminEmail(authUser.email);
+              const newUser = await adminService.createUser({
+                id: authUser.id,
+                email: authUser.email || '',
+                display_name: authUser.user_metadata?.name || authUser.email?.split('@')[0],
+                photo_url: authUser.user_metadata?.avatar_url,
+                role: isAdmin ? 'admin' : 'user',
+                plan: isAdmin ? 'premium' : 'basic',
+                credits_available: isAdmin ? 3000 : 10,
+                subscription_status: isAdmin ? 'active' : 'inactive',
+                created_at: new Date().toISOString()
+              });
 
-          if (!userData) {
-            // Create new user if doesn't exist
-            const isAdmin = isAdminEmail(authUser.email);
-            const newUser = await adminService.createUser({
-              id: authUser.id,
-              email: authUser.email || '',
-              display_name: authUser.user_metadata?.name || authUser.email?.split('@')[0],
-              photo_url: authUser.user_metadata?.avatar_url,
-              role: isAdmin ? 'admin' : 'user',
-              plan: isAdmin ? 'premium' : 'basic',
-              credits_available: isAdmin ? 3000 : 10,
-              subscription_status: isAdmin ? 'active' : 'inactive',
-              created_at: new Date().toISOString()
-            });
-
-            if (newUser) {
-              setUserPlan(newUser.plan);
-              setUserCredits({ image: newUser.credits_available || 10, video: 0, proImage: 0 });
+              if (newUser) {
+                setUserPlan(newUser.plan);
+                setUserCredits({ image: newUser.credits_available || 10, video: 0, proImage: 0 });
+              }
+            } else {
+              console.log("Usuário existente:", userData.email);
+              setUserPlan(userData.plan);
+              setUserCredits({ image: userData.credits_available || 10, video: 0, proImage: 0 });
             }
-          } else {
-            setUserPlan(userData.plan);
-            setUserCredits({ image: userData.credits_available || 10, video: 0, proImage: 0 });
+          } catch (dbError) {
+            console.error("Erro ao sincronizar com banco de dados:", dbError);
           }
         }
       } catch (error) {
@@ -67,9 +82,13 @@ const App: React.FC = () => {
       } finally {
         setUser(authUser || null);
         setLoading(false);
+        clearTimeout(safetyTimer);
       }
     });
-    return () => unsubscribe?.();
+    return () => {
+      unsubscribe?.();
+      clearTimeout(safetyTimer);
+    };
   }, [setUserPlan, setUserCredits]);
 
   if (loading) {
