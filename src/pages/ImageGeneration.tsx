@@ -6,7 +6,7 @@ import {
   Image as ImageIcon, Sparkles, Layers, Settings2, X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { supabase } from '../supabase';
+import { supabase, getCurrentUser } from '../supabase';
 // Migrated to Supabase
 // import { collection, query, where, orderBy, onSnapshot, doc, updateDoc } from 'firebase/firestore'; // Migrated to Supabase
 import kieService from '../services/kieService';
@@ -77,73 +77,117 @@ const ImageGeneration: React.FC = () => {
   }, [location.search, projects]);
 
   useEffect(() => {
-    const userId = auth.currentUser?.uid;
-    if (!userId) return;
+    const loadProjects = async () => {
+      try {
+        const user = await getCurrentUser();
+        if (!user?.id) {
+          setLoading(false);
+          return;
+        }
 
-    const q = query(
-      collection(db, 'projects'),
-      where('userId', '==', userId),
-      orderBy('createdAt', 'desc')
-    );
+        // Fetch initial projects
+        const { data, error } = await supabase
+          .from('projects')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false });
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const items: any[] = [];
-      snapshot.forEach((doc) => {
-        items.push({ id: doc.id, ...doc.data() });
-      });
-      setProjects(items);
-      setLoading(false);
-    });
+        if (error) throw error;
+        setProjects(data || []);
 
-    return () => unsubscribe();
+        // Subscribe to real-time changes
+        const subscription = supabase
+          .channel('projects-channel')
+          .on(
+            'postgres_changes',
+            {
+              event: '*',
+              schema: 'public',
+              table: 'projects',
+              filter: `user_id=eq.${user.id}`
+            },
+            () => {
+              // Reload projects on any change
+              loadProjects();
+            }
+          )
+          .subscribe();
+
+        return () => {
+          subscription.unsubscribe();
+        };
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadProjects();
   }, []);
 
   useEffect(() => {
     if (!generationTask?.generationId || !isGenerating) return;
 
-    const unsubscribe = onSnapshot(doc(db, 'image_generations', generationTask.generationId), (snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.data();
-        
-        if (data.generationStatus === 'completed') {
-          const resultUrl = data.imageUrl3k || data.imageUrl2k || data.imageUrl1k || data.imageUrlPreview;
-          
-          setGenerationTask((prev: any) => ({
-            ...prev,
-            status: 'completed',
-            progress: 100,
-            stage: 'Concluído!',
-            resultUrl: resultUrl || prev.resultUrl
-          }));
-          setIsGenerating(false);
-          
-          if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
-          if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
-        } else if (data.generationStatus === 'failed') {
-          setGenerationTask((prev: any) => ({
-            ...prev,
-            status: 'failed',
-            progress: 0,
-            error: data.errorMessage || 'Falha na geração.'
-          }));
-          setIsGenerating(false);
-          
-          if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
-          if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
-        } else if (data.progressPercentage !== undefined) {
-          setGenerationTask((prev: any) => ({
-            ...prev,
-            progress: Math.max(prev.progress || 0, data.progressPercentage)
-          }));
-        }
-      }
-    });
+    const subscription = supabase
+      .channel(`generation-${generationTask.generationId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'image_generations',
+          filter: `id=eq.${generationTask.generationId}`
+        },
+        (payload) => {
+          const data = payload.new;
 
-    return () => unsubscribe();
+          if (data.generation_status === 'completed') {
+            const resultUrl = data.image_url_3k || data.image_url_2k || data.image_url_1k || data.image_url_preview;
+
+            setGenerationTask((prev: any) => ({
+              ...prev,
+              status: 'completed',
+              progress: 100,
+              stage: 'Concluído!',
+              resultUrl: resultUrl || prev.resultUrl
+            }));
+            setIsGenerating(false);
+
+            if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+            if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
+          } else if (data.generation_status === 'failed') {
+            setGenerationTask((prev: any) => ({
+              ...prev,
+              status: 'failed',
+              progress: 0,
+              error: data.error_message || 'Falha na geração.'
+            }));
+            setIsGenerating(false);
+
+            if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+            if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
+          } else if (data.progress_percentage !== undefined) {
+            setGenerationTask((prev: any) => ({
+              ...prev,
+              progress: Math.max(prev.progress || 0, data.progress_percentage)
+            }));
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      subscription.unsubscribe();
+    };
   }, [generationTask?.generationId, isGenerating]);
 
   const handleGenerate = async () => {
     if (!selectedProject || isGenerating) return;
+
+    const user = await getCurrentUser();
+    if (!user?.id) {
+      console.error('User not authenticated');
+      return;
+    }
 
     const resConfig = RESOLUTIONS.find(r => r.id === selectedResolution);
     const cost = resConfig?.cost || 5;
@@ -198,7 +242,7 @@ const ImageGeneration: React.FC = () => {
       if (selectedProject.originalImage) {
         try {
           const compressedBlob = await processImageForUpload(selectedProject.originalImage, 'main');
-          const { url } = await uploadTempImage(compressedBlob, auth.currentUser?.uid || 'anonymous');
+          const { url } = await uploadTempImage(compressedBlob, user.id);
           image_input.push(url);
         } catch (err) { console.error('Failed to upload main image:', err); }
       }
@@ -206,7 +250,7 @@ const ImageGeneration: React.FC = () => {
       if (selectedProject.mirrorImage) {
         try {
           const compressedBlob = await processImageForUpload(selectedProject.mirrorImage, 'mirror');
-          const { url } = await uploadTempImage(compressedBlob, auth.currentUser?.uid || 'anonymous');
+          const { url } = await uploadTempImage(compressedBlob, user.id);
           image_input.push(url);
         } catch (err) { console.error('Failed to upload mirror image:', err); }
       }

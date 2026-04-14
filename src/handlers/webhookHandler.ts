@@ -92,26 +92,29 @@ export async function handleKieWebhook(req: any): Promise<{ success: boolean }> 
     throw new Error(`Invalid status: ${status}`);
   }
 
-  // 3. Atualizar Firestore
-  const generationRef = doc(db, 'image_generations', generationId);
-
+  // 3. Atualizar Supabase
   try {
     if (status === 'SUCCESS') {
       if (!imageUrl) {
         throw new Error('Missing imageUrl in SUCCESS payload');
       }
 
-      await updateDoc(generationRef, {
-        generation_status: 'completed',
-        is_completed: true,
-        completed_at: new Date().toISOString(),
-        progress_percentage: 100,
-        progress_stage: 'finalizing',
-        image_url_4k: imageUrl,
-        image_url_preview: imageUrl,
-        generation_duration_seconds: metadata?.durationSeconds || 0,
-        kie_api_status: 'success'
-      });
+      const { error } = await supabase
+        .from('image_generations')
+        .update({
+          generation_status: 'completed',
+          is_completed: true,
+          completed_at: new Date().toISOString(),
+          progress_percentage: 100,
+          progress_stage: 'finalizing',
+          image_url_4k: imageUrl,
+          image_url_preview: imageUrl,
+          generation_duration_seconds: metadata?.durationSeconds || 0,
+          kie_api_status: 'success'
+        })
+        .eq('id', generationId);
+
+      if (error) throw error;
 
       logger.info('GENERATION_COMPLETED', {
         generationId,
@@ -121,11 +124,16 @@ export async function handleKieWebhook(req: any): Promise<{ success: boolean }> 
     } else if (status === 'PROCESSING') {
       const { progress, stage } = metadata || {};
 
-      await updateDoc(generationRef, {
-        progress_percentage: progress || 0,
-        progress_stage: stage || 'processing',
-        updated_at: new Date().toISOString()
-      });
+      const { error } = await supabase
+        .from('image_generations')
+        .update({
+          progress_percentage: progress || 0,
+          progress_stage: stage || 'processing',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', generationId);
+
+      if (error) throw error;
 
       logger.debug('GENERATION_PROGRESS', {
         generationId,
@@ -137,17 +145,28 @@ export async function handleKieWebhook(req: any): Promise<{ success: boolean }> 
       const errorMessage = error || 'Unknown error';
 
       // Obter geração para refund
-      const genDoc = await getDoc(generationRef);
-      const genData = genDoc.data();
+      const { data: genData, error: fetchError } = await supabase
+        .from('image_generations')
+        .select('credits_cost, user_id')
+        .eq('id', generationId)
+        .single();
+
+      if (fetchError) throw fetchError;
+
       const creditsCost = genData?.credits_cost;
       const userId = genData?.user_id;
 
-      await updateDoc(generationRef, {
-        generation_status: 'failed',
-        is_completed: false,
-        error_message: errorMessage,
-        kie_api_status: 'failed'
-      });
+      const { error: updateError } = await supabase
+        .from('image_generations')
+        .update({
+          generation_status: 'failed',
+          is_completed: false,
+          error_message: errorMessage,
+          kie_api_status: 'failed'
+        })
+        .eq('id', generationId);
+
+      if (updateError) throw updateError;
 
       logger.error('GENERATION_FAILED', {
         generationId,

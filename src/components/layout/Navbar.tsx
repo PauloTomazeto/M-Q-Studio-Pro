@@ -19,7 +19,10 @@ const Navbar: React.FC = () => {
     });
   }, []);
 
-      <div className="flex items-center gap-4 md:gap-6">
+  return (
+    <header className="border-b border-neutral-200 bg-white sticky top-0 z-40">
+      <div className="flex items-center justify-between px-6 py-3">
+        <div className="flex items-center gap-4 md:gap-6">
         <div className="hidden sm:block">
           <ModeSwitcher />
         </div>
@@ -63,6 +66,7 @@ const Navbar: React.FC = () => {
             </div>
           </div>
         </div>
+      </div>
       </div>
     </header>
   );

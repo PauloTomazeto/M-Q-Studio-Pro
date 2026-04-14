@@ -1,11 +1,11 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
-import { 
-  LayoutDashboard, 
-  Palette, 
+import {
+  LayoutDashboard,
+  Palette,
   Wand2,
-  FolderKanban, 
-  Settings, 
+  FolderKanban,
+  Settings,
   LogOut,
   ChevronLeft,
   ChevronRight,
@@ -17,6 +17,9 @@ import {
 import { supabase } from '../../supabase';
 // import { signOut } from 'firebase/auth';
 import { motion } from 'framer-motion';
+import { clsx, type ClassValue } from 'clsx';
+import { twMerge } from 'tailwind-merge';
+import { useStudioStore } from '../../store/studioStore';
 
 const ADMIN_EMAILS = [
   "paulosilvatomazeto@gmail.com",
@@ -26,18 +29,22 @@ const ADMIN_EMAILS = [
 const isAdminEmail = (email: string | null | undefined) => {
   return email && ADMIN_EMAILS.includes(email);
 };
-import { clsx, type ClassValue } from 'clsx';
-import { twMerge } from 'tailwind-merge';
-import { useStudioStore } from '../../store/studioStore';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
 const Sidebar: React.FC = () => {
-  const [isCollapsed, setIsCollapsed] = React.useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
   const { userPlan } = useStudioStore();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      setCurrentUserEmail(user?.email || null);
+    });
+  }, []);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -53,7 +60,7 @@ const Sidebar: React.FC = () => {
     { icon: Settings, label: 'Configurações', path: '/settings' },
   ];
 
-  const isAdmin = isAdminEmail(auth.currentUser?.email);
+  const isAdmin = isAdminEmail(currentUserEmail);
 
   if (isAdmin) {
     navItems.push({ icon: ShieldCheck, label: 'Painel Admin', path: '/admin' });

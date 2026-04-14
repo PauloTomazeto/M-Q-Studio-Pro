@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
-import { supabase } from '../supabase';
+import { supabase, getCurrentUser } from '../supabase';
 // Migrated to Supabase - import here will be replaced in next refactor
 import { useStudioStore } from '../store/studioStore';
 
@@ -21,28 +21,53 @@ const Projects: React.FC = () => {
   const { loadProject } = useStudioStore();
 
   useEffect(() => {
-    const userId = auth.currentUser?.uid;
-    if (!userId) return;
+    const loadProjects = async () => {
+      try {
+        const user = await getCurrentUser();
+        if (!user?.id) {
+          setLoading(false);
+          return;
+        }
 
-    const q = query(
-      collection(db, 'projects'),
-      where('userId', '==', userId),
-      orderBy('createdAt', 'desc')
-    );
+        // Fetch initial projects
+        const { data, error } = await supabase
+          .from('projects')
+          .select('*')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false });
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const items: any[] = [];
-      snapshot.forEach((doc) => {
-        items.push({ id: doc.id, ...doc.data() });
-      });
-      setProjects(items);
-      setLoading(false);
-    }, (err) => {
-      console.error('Error fetching projects:', err);
-      setLoading(false);
-    });
+        if (error) throw error;
+        setProjects(data || []);
 
-    return () => unsubscribe();
+        // Subscribe to real-time changes
+        const subscription = supabase
+          .channel('projects-list')
+          .on(
+            'postgres_changes',
+            {
+              event: '*',
+              schema: 'public',
+              table: 'projects',
+              filter: `user_id=eq.${user.id}`
+            },
+            () => {
+              // Reload projects on any change
+              loadProjects();
+            }
+          )
+          .subscribe();
+
+        return () => {
+          subscription.unsubscribe();
+        };
+      } catch (err) {
+        console.error('Error fetching projects:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadProjects();
   }, []);
 
   const handleEdit = (project: any) => {
@@ -57,8 +82,14 @@ const Projects: React.FC = () => {
   const confirmDelete = async () => {
     if (!deleteId) return;
     try {
-      await deleteDoc(doc(db, 'projects', deleteId));
+      const { error } = await supabase
+        .from('projects')
+        .delete()
+        .eq('id', deleteId);
+
+      if (error) throw error;
       setDeleteId(null);
+      setProjects(projects.filter(p => p.id !== deleteId));
     } catch (err) {
       console.error('Failed to delete project:', err);
     }

@@ -4,7 +4,7 @@ import { useCredits } from '../../hooks/useCredits';
 import kieService from '../../services/kieService';
 import { uploadTempImage, compressImage } from '../../services/storageService';
 import { imageGenerationService } from '../../services/imageGenerationService';
-import { supabase } from '../../supabase';
+import { supabase, getCurrentUser } from '../../supabase';
 // import { doc, updateDoc, setDoc } from 'firebase/firestore'; // Migrated to Supabase
 import { 
   Loader2, Download, Share2, CheckCircle2, AlertCircle, 
@@ -106,8 +106,13 @@ const GenerationStep: React.FC = () => {
     const cost = Math.ceil((resConfig?.cost || 5) * modelConfig.costMultiplier);
 
     try {
+      const user = await getCurrentUser();
+      if (!user?.id) {
+        throw new Error('User not authenticated');
+      }
+
       const hasCredits = await consumeCredits(cost, 'image_generation');
-      
+
       if (!hasCredits) {
         setGenerationTask({
           taskId: 'error',
@@ -158,13 +163,13 @@ const GenerationStep: React.FC = () => {
 
       if (base64Image) {
         const compressed = await processImageForUpload(base64Image);
-        const { url } = await uploadTempImage(compressed, auth.currentUser?.uid || 'anonymous');
+        const { url } = await uploadTempImage(compressed, user.id);
         image_input.push(url);
       }
       
       if (mirrorImage) {
         const compressed = await processImageForUpload(mirrorImage);
-        const { url } = await uploadTempImage(compressed, auth.currentUser?.uid || 'anonymous');
+        const { url } = await uploadTempImage(compressed, user.id);
         image_input.push(url);
       }
 
@@ -191,7 +196,7 @@ const GenerationStep: React.FC = () => {
       const { sessionId } = useStudioStore.getState();
       const generationDoc: any = {
         image_generation_id: taskId,
-        user_id: auth.currentUser?.uid,
+        user_id: user.id,
         session_id: sessionId || 'temp_session',
         prompt_content: activePrompt,
         generation_status: directUrl ? 'completed' : 'processing',
@@ -203,7 +208,14 @@ const GenerationStep: React.FC = () => {
         image_url_preview: directUrl || null
       };
       
-      await setDoc(doc(db, 'image_generations', taskId), generationDoc);
+      const { error: insertError } = await supabase
+        .from('image_generations')
+        .insert({
+          id: taskId,
+          ...generationDoc
+        });
+
+      if (insertError) throw insertError;
 
       // 5. Start Real-time DB Listening (UI ONLY reacts to DB changes)
       if (unsubscribeRef.current) unsubscribeRef.current();

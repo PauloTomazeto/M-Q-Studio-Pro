@@ -3,8 +3,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Check, Zap, Crown, Sparkles, ArrowRight, Camera, Video, Layout as LayoutIcon, Loader2, Coins, Plus } from 'lucide-react';
 import { useStudioStore } from '../store/studioStore';
 import { useNavigate } from 'react-router-dom';
-// import { adminService TODO
-import { supabase } from '../supabase';
+import adminService from '../services/adminService';
+import { supabase, getCurrentUser } from '../supabase';
 // import { doc, updateDoc, increment } from 'firebase/firestore'; // Migrated to Supabase
 import confetti from 'canvas-confetti';
 
@@ -50,7 +50,7 @@ const PricingPage: React.FC = () => {
   }, []);
 
   const handleSelectPlan = async (plan: PlanConfig) => {
-    const user = auth.currentUser;
+    const user = await getCurrentUser();
     if (!user) {
       navigate('/');
       return;
@@ -63,7 +63,7 @@ const PricingPage: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           planId: plan.id,
-          userId: user.uid,
+          userId: user.id,
           email: user.email
         })
       });
@@ -80,7 +80,7 @@ const PricingPage: React.FC = () => {
 
   const handleBuyCredits = async () => {
     if (!creditPackage) return;
-    const user = auth.currentUser;
+    const user = await getCurrentUser();
     if (!user) {
       navigate('/');
       return;
@@ -90,11 +90,25 @@ const PricingPage: React.FC = () => {
     try {
       // In a real app, this would be a Stripe checkout session for credits
       // For this demo, we'll simulate a successful purchase
-      const userRef = doc(db, 'users', user.uid);
-      await updateDoc(userRef, {
-        credits: increment(creditPackage.amount),
-        updatedAt: new Date().toISOString()
-      });
+      // Get current credits and add new amount
+      const { data: userData } = await supabase
+        .from('users')
+        .select('credits')
+        .eq('id', user.id)
+        .single();
+
+      const currentCredits = userData?.credits || 0;
+      const newCredits = currentCredits + creditPackage.amount;
+
+      const { error } = await supabase
+        .from('users')
+        .update({
+          credits: newCredits,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', user.id);
+
+      if (error) throw error;
 
       setUserCredits({ ...userCredits, image: userCredits.image + creditPackage.amount });
       

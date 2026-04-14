@@ -3,7 +3,7 @@ import { useStudioStore } from '../../store/studioStore';
 import kieService from '../../services/kieService';
 import { useCredits } from '../../hooks/useCredits';
 import { uploadTempImage, compressImage } from '../../services/storageService';
-import { supabase } from '../../supabase';
+import { supabase, getCurrentUser } from '../../supabase';
 // import { doc, updateDoc, onSnapshot } from 'firebase/firestore'; // Migrated to Supabase
 import { 
   Loader2, Copy, Check, Edit3, Wand2, ArrowRight, Star, RotateCcw,
@@ -72,18 +72,22 @@ const ResultStep: React.FC = () => {
     if (projectId && !nameOverride) {
       setIsSavingProject(true);
       try {
-        const projectRef = doc(db, 'projects', projectId);
-        await updateDoc(projectRef, {
-          prompt: activePrompt,
-          originalImage: base64Image,
-          mirrorImage: mirrorImage,
-          scanResult,
-          configParams,
-          materials,
-          ambientLight,
-          lightPoints,
-          updatedAt: new Date().toISOString()
-        });
+        const { error } = await supabase
+          .from('projects')
+          .update({
+            prompt: activePrompt,
+            original_image: base64Image,
+            mirror_image: mirrorImage,
+            scan_result: scanResult,
+            config_params: configParams,
+            materials,
+            ambient_light: ambientLight,
+            light_points: lightPoints,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', projectId);
+
+        if (error) throw error;
         
         setSaveSuccess(true);
         setTimeout(() => setSaveSuccess(false), 3000);
@@ -96,7 +100,7 @@ const ResultStep: React.FC = () => {
         });
       } catch (err) {
         console.error('Failed to update project:', err);
-        handleFirestoreError(err, OperationType.WRITE, 'projects');
+        console.error('Failed to update project:', err);
       } finally {
         setIsSavingProject(false);
       }
@@ -112,25 +116,33 @@ const ResultStep: React.FC = () => {
     
     setIsSavingProject(true);
     try {
-      // TODO: Migrate to Supabase - const { } = await import('//firebase/firestore');
-      const projectData = {
-        name: finalName,
-        prompt: activePrompt,
-        originalImage: base64Image,
-        mirrorImage: mirrorImage,
-        scanResult,
-        configParams,
-        materials,
-        ambientLight,
-        lightPoints,
-        userId: auth.currentUser?.uid,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        type: 'saved_project'
-      };
-      
-      const docRef = await addDoc(collection(db, 'projects'), projectData);
-      setProjectId(docRef.id);
+      const user = await getCurrentUser();
+      if (!user?.id) {
+        throw new Error('User not authenticated');
+      }
+
+      const { data, error } = await supabase
+        .from('projects')
+        .insert({
+          name: finalName,
+          prompt: activePrompt,
+          original_image: base64Image,
+          mirror_image: mirrorImage,
+          scan_result: scanResult,
+          config_params: configParams,
+          materials,
+          ambient_light: ambientLight,
+          light_points: lightPoints,
+          user_id: user.id,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          type: 'saved_project'
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+      setProjectId(data?.id);
       
       setSaveSuccess(true);
       setTimeout(() => {

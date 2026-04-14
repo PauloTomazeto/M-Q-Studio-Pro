@@ -68,28 +68,32 @@ export function useCredits(): UseCreditReturns {
     fetchCredits()
 
     // Subscribe to real-time updates
-    const user = getCurrentUser()
-    if (!user) return
+    const setupSubscription = async () => {
+      const user = await getCurrentUser()
+      if (!user) return
 
-    const subscription = supabase
-      .channel('user-credits')
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'users',
-          filter: `id=eq.${user.id}`
-        },
-        () => {
-          fetchCredits()
-        }
-      )
-      .subscribe()
+      const subscription = supabase
+        .channel('user-credits')
+        .on(
+          'postgres_changes',
+          {
+            event: 'UPDATE',
+            schema: 'public',
+            table: 'users',
+            filter: `id=eq.${user.id}`
+          },
+          () => {
+            fetchCredits()
+          }
+        )
+        .subscribe()
 
-    return () => {
-      subscription.unsubscribe()
+      return () => {
+        subscription.unsubscribe()
+      }
     }
+
+    setupSubscription().catch(console.error)
   }, [fetchCredits])
 
   const debit = useCallback(

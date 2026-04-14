@@ -57,6 +57,7 @@ const AdminPage: React.FC = () => {
   const [notification, setNotification] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
   const [userUsageLogs, setUserUsageLogs] = useState<any[]>([]);
   const [loadingUserUsage, setLoadingUserUsage] = useState(false);
+  const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
   const [newUser, setNewUser] = useState({
     email: '',
     displayName: '',
@@ -77,11 +78,12 @@ const AdminPage: React.FC = () => {
 
   useEffect(() => {
     const checkAdmin = async () => {
-      const user = auth.currentUser;
+      const { data: { user } } = await supabase.auth.getUser();
       if (!user || !isAdminEmail(user.email)) {
         navigate('/');
         return;
       }
+      setCurrentUserEmail(user.email || null);
       loadData();
     };
     checkAdmin();
@@ -133,7 +135,7 @@ const AdminPage: React.FC = () => {
   };
 
   const handleDeleteUser = async (userId: string, userEmail: string) => {
-    if (userEmail === auth.currentUser?.email) {
+    if (userEmail === currentUserEmail) {
       setNotification({ message: 'Você não pode excluir sua própria conta de administrador.', type: 'error' });
       return;
     }
