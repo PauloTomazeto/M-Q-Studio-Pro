@@ -14,14 +14,25 @@ import type { User as SupabaseUser } from '@supabase/supabase-js';
 // ============================================================
 
 export const auth = {
-  currentUser: null as SupabaseUser | null,
+  get currentUser() {
+    // Nota: Em Supabase, o usuário é obtido de forma assíncrona ou da sessão atual
+    // Para compatibilidade síncrona, tentamos pegar da sessão persistida se houver
+    const session = supabase.auth.getSession();
+    // @ts-ignore - Tentativa de retorno síncrono para compatibilidade
+    return (supabase as any).auth?.session()?.user || null;
+  },
 
   getUser: async () => {
     const { data: { user } } = await supabase.auth.getUser();
     return user;
   },
 
-  onAuthStateChanged: (callback: (user: SupabaseUser | null) => void) => {
+  onAuthStateChanged: (callback: (user: any | null) => void) => {
+    // Chama o callback imediatamente com o usuário atual se existir
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      callback(user || null);
+    });
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       callback(session?.user || null);
     });
@@ -31,6 +42,21 @@ export const auth = {
   signOut: async () => {
     return await supabase.auth.signOut();
   }
+};
+
+/**
+ * Função de compatibilidade para signInWithPopup
+ */
+export const signInWithPopup = async (_auth: any, _provider: any) => {
+  const { data, error } = await supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: {
+      redirectTo: window.location.origin
+    }
+  });
+  
+  if (error) throw error;
+  return data;
 };
 
 // ============================================================
@@ -100,22 +126,16 @@ export function handleFirestoreError(
   operationType: OperationType,
   path: string | null
 ) {
-  const user = (supabase.auth.getUser());
-  const errInfo: FirestoreErrorInfo = {
+  // Nota: handleFirestoreError agora é síncrona para compatibilidade, 
+  // mas tenta logar o erro com o que tiver disponível
+  const errInfo = {
     error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: user.then(u => u.data?.user?.id),
-      email: user.then(u => u.data?.user?.email),
-      emailVerified: user.then(u => u.data?.user?.email_confirmed_at !== null),
-      isAnonymous: false,
-      tenantId: null,
-      providerInfo: []
-    },
     operationType,
-    path
+    path,
+    timestamp: new Date().toISOString()
   };
-  console.error('Supabase Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+  console.error('Supabase/Firestore Bridge Error: ', errInfo);
+  throw error;
 }
 
 // ============================================================
