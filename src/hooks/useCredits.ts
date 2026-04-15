@@ -81,7 +81,14 @@ export function useCredits(): UseCreditReturns {
 
   const logModeSelection = useCallback(async (mode: string) => {
     console.log(`[useCredits] Modo selecionado: ${mode}`);
-    // Opcional: Aqui você pode adicionar lógica para salvar a seleção no banco de dados se necessário
+    setUserProfile((prev: any) => {
+      if (!prev) return prev;
+      const currentHistory = prev.modeHistory || [];
+      return {
+        ...prev,
+        modeHistory: [...currentHistory, { mode, timestamp: new Date().toISOString() }]
+      };
+    });
   }, []);
 
   useEffect(() => {

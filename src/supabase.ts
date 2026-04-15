@@ -53,6 +53,7 @@ export interface User {
   reset_date?: string
   subscription_status: string
   stripe_customer_id?: string
+  mode_history?: any[]
   created_at: string
   updated_at: string
 }
