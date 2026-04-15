@@ -1,6 +1,6 @@
 /**
  * Storage Service - Supabase Version
- * Gerencia uploads de arquivos e deduplicação
+ * Gerencia uploads de arquivos e deduplica��o
  *
  * Substitui: src/services/storageService.ts
  */
@@ -9,41 +9,172 @@ import { supabase, uploadFile, deleteFile, getPublicFileUrl, ImageUpload } from 
 import crypto from 'crypto'
 
 // ============================================================
+// TYPES & INTERFACES
+// ============================================================
+
+export interface ValidationStepResult {
+  step: string
+  valid: boolean
+  warning?: boolean
+  error?: string
+  details?: any
+}
+
+export interface ValidationChainResult {
+  allValid: boolean
+  steps: ValidationStepResult[]
+}
+
+// ============================================================
+// VALIDATION & PROCESSING
+// ============================================================
+
+/**
+ * Valida um arquivo de imagem seguindo uma cadeia de regras
+ * Rules:
+ * - Format: JPG, PNG, WebP, HEIC, TIFF
+ * - Size: 300KB - 20MB
+ * - Dimensions: 800x600px - 8000x8000px
+ */
+export async function validateFileChain(file: File, plan: string = 'basic'): Promise<ValidationChainResult> {
+  const steps: ValidationStepResult[] = []
+  
+  // 1. Check Format
+  const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/heic', 'image/tiff']
+  const isFormatValid = allowedTypes.includes(file.type) || 
+                       file.name.toLowerCase().endsWith('.heic') || 
+                       file.name.toLowerCase().endsWith('.tiff')
+  
+  steps.push({
+    step: 'format',
+    valid: isFormatValid,
+    error: isFormatValid ? undefined : 'UNSUPPORTED_FORMAT',
+    details: { type: file.type, name: file.name }
+  })
+
+  // 2. Check Size
+  const minSize = 300 * 1024 // 300KB
+  const maxSize = 20 * 1024 * 1024 // 20MB
+  
+  let sizeError: string | undefined
+  if (file.size < minSize) sizeError = 'FILE_TOO_SMALL'
+  if (file.size > maxSize) sizeError = 'FILE_TOO_LARGE'
+  
+  steps.push({
+    step: 'size',
+    valid: !sizeError,
+    error: sizeError,
+    details: { size: file.size, minSize, maxSize }
+  })
+
+  // 3. Check Dimensions (if format and size are ok)
+  if (isFormatValid && !sizeError) {
+    try {
+      const dimensions = await getImageDimensions(file)
+      if (dimensions) {
+        const minDim = { width: 800, height: 600 }
+        const maxDim = { width: 8000, height: 8000 }
+        
+        let dimError: string | undefined
+        if (dimensions.width < minDim.width || dimensions.height < minDim.height) {
+          dimError = 'IMAGE_TOO_SMALL_PIXELS'
+        } else if (dimensions.width > maxDim.width || dimensions.height > maxDim.height) {
+          dimError = 'IMAGE_TOO_LARGE_PIXELS'
+        }
+        
+        steps.push({
+          step: 'dimensions',
+          valid: !dimError,
+          error: dimError,
+          details: dimensions
+        })
+      } else {
+        steps.push({
+          step: 'dimensions',
+          valid: false,
+          error: 'IMAGE_DECODE_FAILED'
+        })
+      }
+    } catch (e) {
+      steps.push({
+        step: 'dimensions',
+        valid: false,
+        error: 'IMAGE_DECODE_TIMEOUT'
+      })
+    }
+  }
+
+  return {
+    allValid: steps.every(s => s.valid || s.warning),
+    steps
+  }
+}
+
+/**
+ * Stub para compressão de imagem (pode ser expandido futuramente)
+ */
+export async function compressImage(file: File, quality: number = 0.8, maxDimension?: number): Promise<File | Blob> {
+  // Por enquanto apenas retorna o arquivo original
+  return file
+}
+
+// ============================================================
 // FILE UPLOAD
 // ============================================================
 
-export async function uploadImage(userId: string, file: File) {
-  // Gerar SHA256 do arquivo
+export async function uploadImage(file: File, validationResult: ValidationChainResult, base64: string) {
+  // 1. Obter usuário atual
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error('User not authenticated')
+  const userId = user.id
+
+  // 2. Gerar SHA256 do arquivo
   const arrayBuffer = await file.arrayBuffer()
   const hashBuffer = crypto.createHash('sha256').update(new Uint8Array(arrayBuffer)).digest()
   const sha256 = hashBuffer.toString('hex')
 
-  // Checar se arquivo já existe (deduplicação)
+  // 3. Checar se arquivo já existe (deduplicação)
   const existingUpload = await getUploadBySha256(sha256)
+  
+  let uploadRecord: ImageUpload
+  let storagePath: string
+
   if (existingUpload) {
     // Incrementar reuse count
     await incrementFileReuse(sha256)
-    return existingUpload
+    uploadRecord = existingUpload
+    storagePath = existingUpload.storage_path!
+  } else {
+    // Fazer upload para Supabase Storage
+    const filename = `${userId}/${Date.now()}-${file.name}`
+    const data = await uploadFile('user-uploads', filename, file)
+    storagePath = data.path
+
+    // Registrar no banco de dados
+    const dimensions = validationResult.steps.find(s => s.step === 'dimensions')?.details || await getImageDimensions(file)
+    uploadRecord = await createImageUpload({
+      user_id: userId,
+      sha256,
+      storage_path: storagePath,
+      mime_type: file.type,
+      dimensions
+    })
+
+    // Registrar na deduplicação
+    await recordFileDeduplication(sha256, storagePath)
   }
 
-  // Fazer upload para Supabase Storage
-  const filename = `${userId}/${Date.now()}-${file.name}`
-  const { name: storagePath } = await uploadFile('user-uploads', filename, file)
-
-  // Registrar no banco de dados
-  const dimensions = await getImageDimensions(file)
-  const uploadRecord = await createImageUpload({
-    user_id: userId,
-    sha256,
-    storage_path: storagePath,
-    mime_type: file.type,
-    dimensions
-  })
-
-  // Registrar na deduplicação
-  await recordFileDeduplication(sha256, storagePath)
-
-  return uploadRecord
+  // 4. Retornar dados esperados pelo componente
+  return {
+    sessionId: uploadRecord.id,
+    metadata: {
+      uploadId: uploadRecord.id,
+      storagePath: uploadRecord.storage_path,
+      dimensions: uploadRecord.dimensions,
+      mimeType: uploadRecord.mime_type,
+      validation: validationResult
+    }
+  }
 }
 
 export async function createImageUpload(uploadData: {
@@ -265,5 +396,7 @@ export default {
   incrementUploadCount,
   hasUploadQuotaAvailable,
   deleteUpload,
-  getUploadUrl
+  getUploadUrl,
+  validateFileChain,
+  compressImage
 }

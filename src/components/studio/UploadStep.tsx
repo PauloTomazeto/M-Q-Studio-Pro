@@ -20,11 +20,11 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  uploadImage
-  // validateFileChain,
-  // compressImage,
-  // ValidationChainResult,
-  // ValidationStepResult
+  uploadImage,
+  validateFileChain,
+  compressImage,
+  type ValidationChainResult,
+  type ValidationStepResult
 } from '../../services/storageService';
 import kieService from '../../services/kieService';
 import { clsx, type ClassValue } from 'clsx';
