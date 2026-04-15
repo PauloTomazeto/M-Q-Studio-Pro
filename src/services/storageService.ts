@@ -6,7 +6,17 @@
  */
 
 import { supabase, uploadFile, deleteFile, getPublicFileUrl, ImageUpload } from '../supabase'
-import crypto from 'crypto'
+
+/**
+ * Gera um hash SHA256 de um arquivo (compatível com navegador)
+ */
+async function generateSHA256(file: File): Promise<string> {
+  const arrayBuffer = await file.arrayBuffer();
+  const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  return hashHex;
+}
 
 // ============================================================
 // TYPES & INTERFACES
@@ -128,10 +138,8 @@ export async function uploadImage(file: File, validationResult: ValidationChainR
   if (!user) throw new Error('User not authenticated')
   const userId = user.id
 
-  // 2. Gerar SHA256 do arquivo
-  const arrayBuffer = await file.arrayBuffer()
-  const hashBuffer = crypto.createHash('sha256').update(new Uint8Array(arrayBuffer)).digest()
-  const sha256 = hashBuffer.toString('hex')
+  // 2. Gerar SHA256 do arquivo (Compatível com navegador)
+  const sha256 = await generateSHA256(file)
 
   // 3. Checar se arquivo já existe (deduplicação)
   const existingUpload = await getUploadBySha256(sha256)
