@@ -145,6 +145,9 @@ export async function handleKieWebhook(req: any): Promise<{ success: boolean }> 
       const errorMessage = error || 'Unknown error';
 
       // Obter geração para refund
+      // SECURITY: This webhook uses the SERVICE_ROLE_KEY which bypasses RLS.
+      // This is safe because the webhook handler verifies the HMAC signature.
+      // For additional security, consider validating the generation exists before updating.
       const { data: genData, error: fetchError } = await supabase
         .from('image_generations')
         .select('credits_cost, user_id')

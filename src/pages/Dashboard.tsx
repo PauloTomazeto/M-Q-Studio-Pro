@@ -22,7 +22,7 @@ const Dashboard: React.FC = () => {
   const navigate = useNavigate();
   const { credits, loading: creditsLoading } = useCredits();
   const { mode, setMode, userPlan, userCredits } = useStudioStore();
-  const { history, loading: historyLoading } = useHistory(5);
+  const { generations: history = [], loading: historyLoading } = useHistory({ limit: 5 });
   const [showModeSelection, setShowModeSelection] = useState(false);
   const [currentUser, setCurrentUser] = useState<any>(null);
 

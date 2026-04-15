@@ -319,13 +319,13 @@ const Projects: React.FC = () => {
                 <div className="flex-1 flex flex-col gap-6">
                   <div className="aspect-video bg-neutral-50 dark:bg-neutral-950 rounded-3xl border border-neutral-100 dark:border-neutral-800 overflow-hidden flex items-center justify-center relative group">
                     <img 
-                      src={viewingResults.generatedImages[selectedResultIndex].url} 
+                      src={viewingResults?.generatedImages?.[selectedResultIndex].url} 
                       className="max-w-full max-h-full object-contain"
                       alt="Result"
                     />
                     <div className="absolute bottom-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                       <button 
-                        onClick={() => window.open(viewingResults.generatedImages[selectedResultIndex].url, '_blank')}
+                        onClick={() => window.open(viewingResults?.generatedImages?.[selectedResultIndex].url, '_blank')}
                         className="p-3 bg-white/90 dark:bg-neutral-900/90 backdrop-blur-md rounded-xl shadow-lg hover:scale-110 transition-transform"
                       >
                         <Download size={20} />
@@ -337,20 +337,20 @@ const Projects: React.FC = () => {
                     <div className="flex gap-4">
                       <div className="text-center">
                         <span className="text-[10px] font-bold text-neutral-400 uppercase block">Resolução</span>
-                        <span className="font-bold text-sm">{viewingResults.generatedImages[selectedResultIndex].resolution}</span>
+                        <span className="font-bold text-sm">{viewingResults?.generatedImages?.[selectedResultIndex].resolution}</span>
                       </div>
                       <div className="text-center">
                         <span className="text-[10px] font-bold text-neutral-400 uppercase block">Formato</span>
-                        <span className="font-bold text-sm">{viewingResults.generatedImages[selectedResultIndex].aspectRatio}</span>
+                        <span className="font-bold text-sm">{viewingResults?.generatedImages?.[selectedResultIndex].aspectRatio}</span>
                       </div>
                       <div className="text-center">
                         <span className="text-[10px] font-bold text-neutral-400 uppercase block">Data</span>
-                        <span className="font-bold text-sm">{new Date(viewingResults.generatedImages[selectedResultIndex].createdAt).toLocaleDateString()}</span>
+                        <span className="font-bold text-sm">{new Date(viewingResults?.generatedImages?.[selectedResultIndex].createdAt).toLocaleDateString()}</span>
                       </div>
                     </div>
                     
                     <button
-                      onClick={() => window.open(viewingResults.generatedImages[selectedResultIndex].url, '_blank')}
+                      onClick={() => window.open(viewingResults?.generatedImages?.[selectedResultIndex].url, '_blank')}
                       className="px-6 py-3 bg-primary text-white font-bold rounded-xl hover:bg-primary-dark transition-all flex items-center gap-2 shadow-lg shadow-primary/20"
                     >
                       <Download size={18} />
@@ -363,7 +363,7 @@ const Projects: React.FC = () => {
                 <div className="w-full md:w-48 shrink-0 space-y-4">
                   <h4 className="text-xs font-bold text-neutral-400 uppercase tracking-widest">Galeria</h4>
                   <div className="grid grid-cols-4 md:grid-cols-1 gap-3 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
-                    {viewingResults.generatedImages.map((img: any, idx: number) => (
+                    {viewingResults?.generatedImages?.map((img: any, idx: number) => (
                       <button
                         key={idx}
                         onClick={() => setSelectedResultIndex(idx)}

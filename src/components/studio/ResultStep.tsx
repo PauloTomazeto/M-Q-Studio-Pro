@@ -38,7 +38,7 @@ const ResultStep: React.FC = () => {
   } = useStudioStore();
   const { consumeCredits, refundCredits } = useCredits();
   const [status, setStatus] = useState<'loading' | 'success' | 'error'>(
-    (configParams.promptMode === 'single' ? generatedPrompt : (generatedBlocks && generatedBlocks.length > 0)) ? 'success' : 'loading'
+    (configParams.promptMode === 'single' ? generatedPrompt : (generatedBlocks?.length ?? 0) > 0) ? 'success' : 'loading'
   );
   const [prompt, setPrompt] = useState<string | null>(generatedPrompt);
   const [blocks, setBlocks] = useState<any[] | null>(generatedBlocks);

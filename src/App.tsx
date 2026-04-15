@@ -42,7 +42,7 @@ const App: React.FC = () => {
       }
     }, 15000);
 
-    const unsubscribe = supabase.auth.onAuthStateChange(async (event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       const authUser = session?.user;
       console.log("Evento de Autenticação:", event, authUser?.email);
       
@@ -100,8 +100,9 @@ const App: React.FC = () => {
         clearTimeout(safetyTimer);
       }
     });
+
     return () => {
-      unsubscribe?.data?.subscription?.unsubscribe();
+      subscription.unsubscribe();
       clearTimeout(safetyTimer);
     };
   }, [setUserPlan, setUserCredits]);

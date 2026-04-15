@@ -185,6 +185,12 @@ export async function updateAppConfig(key: string, value: Record<string, any>) {
 // ADMIN HELPERS
 // ============================================================
 
+/**
+ * Get all users (ADMIN ONLY)
+ * SECURITY: This function relies on Supabase RLS policies to restrict access.
+ * Ensure that RLS is enabled on the 'users' table and only admins can execute this query.
+ * Without RLS, this will return all users in the database.
+ */
 export async function getAllUsers(limit: number = 100) {
   const { data, error } = await supabase
     .from('users')
