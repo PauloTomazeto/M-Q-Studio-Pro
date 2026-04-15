@@ -26,10 +26,13 @@ interface UseCreditReturns {
   debit: (amount: number, reason: string) => Promise<boolean>
   credit: (amount: number, reason: string) => Promise<boolean>
   hasEnough: (amount: number) => boolean
+  userProfile: any | null
+  logModeSelection: (mode: string) => Promise<void>
 }
 
 export function useCredits(): UseCreditReturns {
   const [credits, setCredits] = useState<UserCredits | null>(null)
+  const [userProfile, setUserProfile] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<Error | null>(null)
 
@@ -40,60 +43,85 @@ export function useCredits(): UseCreditReturns {
 
       if (!user) {
         setCredits(null)
+        setUserProfile(null)
         return
       }
 
-      const userCredits = await creditsService.getUserCredits(user.id)
+      // Buscar créditos e perfil em paralelo
+      const [userCredits, { data: profile }] = await Promise.all([
+        creditsService.getUserCredits(user.id),
+        supabase.from('users').select('*').eq('auth_id', user.id).maybeSingle()
+      ])
 
       setCredits({
         user_id: user.id,
         credits_available: userCredits.credits || 0,
         credits_used_this_month: userCredits.monthlySpent || 0,
         monthly_limit: userCredits.monthlyLimit || 100,
-        is_admin: false, // Pode ser inferido de outro lugar se necessário
+        is_admin: profile?.role === 'admin',
         last_updated: new Date().toISOString()
       })
+
+      // Garantir que modeHistory exista para evitar crash no Modo Selection
+      setUserProfile({
+        ...profile,
+        modeHistory: profile?.mode_history || []
+      })
+
       setError(null)
     } catch (err) {
       const error = err instanceof Error ? err : new Error('Failed to fetch credits')
       setError(error)
       setCredits(null)
+      setUserProfile(null)
     } finally {
       setLoading(false)
     }
   }, [])
 
+  const logModeSelection = useCallback(async (mode: string) => {
+    console.log(`[useCredits] Modo selecionado: ${mode}`);
+    // Opcional: Aqui você pode adicionar lógica para salvar a seleção no banco de dados se necessário
+  }, []);
+
   useEffect(() => {
     // Fetch initial credits
     fetchCredits()
+
+    let channel: any;
 
     // Subscribe to real-time updates
     const setupSubscription = async () => {
       const user = await getCurrentUser()
       if (!user) return
 
-      const subscription = supabase
-        .channel('user-credits')
+      // Nome do canal único por instância para evitar erro "after subscribe"
+      const channelName = `user-credits-${user.id}-${Math.random().toString(36).substring(7)}`;
+
+      channel = supabase
+        .channel(channelName)
         .on(
           'postgres_changes',
           {
             event: 'UPDATE',
             schema: 'public',
             table: 'users',
-            filter: `id=eq.${user.id}`
+            filter: `auth_id=eq.${user.id}`
           },
           () => {
             fetchCredits()
           }
         )
         .subscribe()
-
-      return () => {
-        subscription.unsubscribe()
-      }
     }
 
     setupSubscription().catch(console.error)
+
+    return () => {
+      if (channel) {
+        supabase.removeChannel(channel)
+      }
+    }
   }, [fetchCredits])
 
   const debit = useCallback(
@@ -147,6 +175,8 @@ export function useCredits(): UseCreditReturns {
 
   return {
     credits,
+    userProfile,
+    logModeSelection,
     loading,
     error,
     refetch: fetchCredits,
