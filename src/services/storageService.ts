@@ -132,57 +132,95 @@ export async function compressImage(file: File, quality: number = 0.8, maxDimens
 // FILE UPLOAD
 // ============================================================
 
-export async function uploadImage(file: File, validationResult: ValidationChainResult, base64: string) {
-  // 1. Obter usuário atual
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) throw new Error('User not authenticated')
-  const userId = user.id
+export async function uploadImage(
+  file: File,
+  validationResult: ValidationChainResult,
+  base64: string,
+  onProgress?: (progress: number) => void
+) {
+  const UPLOAD_TIMEOUT = 60000 // 60 segundos
+  const timeout = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('UPLOAD_TIMEOUT')), UPLOAD_TIMEOUT)
+  )
 
-  // 2. Gerar SHA256 do arquivo (Compatível com navegador)
-  const sha256 = await generateSHA256(file)
+  try {
+    // 1. Obter usuário atual
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) throw new Error('AUTH_REQUIRED')
+    const userId = user.id
 
-  // 3. Checar se arquivo já existe (deduplicação)
-  const existingUpload = await getUploadBySha256(sha256)
-  
-  let uploadRecord: ImageUpload
-  let storagePath: string
+    // 2. Gerar SHA256 do arquivo (Compatível com navegador)
+    onProgress?.(10)
+    const sha256 = await generateSHA256(file)
 
-  if (existingUpload) {
-    // Incrementar reuse count
-    await incrementFileReuse(sha256)
-    uploadRecord = existingUpload
-    storagePath = existingUpload.storage_path!
-  } else {
-    // Fazer upload para Supabase Storage
-    const filename = `${userId}/${Date.now()}-${file.name}`
-    const bucketName = import.meta.env.VITE_STORAGE_BUCKET_NAME || 'user-uploads'
-    const data = await uploadFile(bucketName, filename, file)
-    storagePath = data.path
+    // 3. Checar se arquivo já existe (deduplicação)
+    onProgress?.(20)
+    const existingUpload = await getUploadBySha256(sha256)
 
-    // Registrar no banco de dados
-    const dimensions = validationResult.steps.find(s => s.step === 'dimensions')?.details || await getImageDimensions(file)
-    uploadRecord = await createImageUpload({
-      user_id: userId,
-      sha256,
-      storage_path: storagePath,
-      mime_type: file.type,
-      dimensions
-    })
+    let uploadRecord: ImageUpload
+    let storagePath: string
 
-    // Registrar na deduplicação
-    await recordFileDeduplication(sha256, storagePath)
-  }
+    if (existingUpload) {
+      // Incrementar reuse count
+      onProgress?.(40)
+      await incrementFileReuse(sha256)
+      uploadRecord = existingUpload
+      storagePath = existingUpload.storage_path!
+      onProgress?.(90)
+    } else {
+      // Fazer upload para Supabase Storage com timeout
+      onProgress?.(30)
+      const filename = `${userId}/${Date.now()}-${file.name}`
+      const bucketName = import.meta.env.VITE_STORAGE_BUCKET_NAME || 'user-uploads'
 
-  // 4. Retornar dados esperados pelo componente
-  return {
-    sessionId: uploadRecord.id,
-    metadata: {
-      uploadId: uploadRecord.id,
-      storagePath: uploadRecord.storage_path,
-      dimensions: uploadRecord.dimensions,
-      mimeType: uploadRecord.mime_type,
-      validation: validationResult
+      let data
+      try {
+        data = await Promise.race([
+          uploadFile(bucketName, filename, file),
+          timeout
+        ]) as any
+      } catch (err: any) {
+        if (err.message === 'UPLOAD_TIMEOUT') {
+          throw new Error('UPLOAD_TIMEOUT')
+        }
+        throw err
+      }
+
+      storagePath = data.path
+      onProgress?.(60)
+
+      // Registrar no banco de dados
+      const dimensions = validationResult.steps.find(s => s.step === 'dimensions')?.details || await getImageDimensions(file)
+      onProgress?.(75)
+      uploadRecord = await createImageUpload({
+        user_id: userId,
+        sha256,
+        storage_path: storagePath,
+        mime_type: file.type,
+        dimensions
+      })
+
+      // Registrar na deduplicação
+      onProgress?.(85)
+      await recordFileDeduplication(sha256, storagePath)
+      onProgress?.(90)
     }
+
+    // 4. Retornar dados esperados pelo componente
+    onProgress?.(100)
+    return {
+      sessionId: uploadRecord.id,
+      metadata: {
+        uploadId: uploadRecord.id,
+        storagePath: uploadRecord.storage_path,
+        dimensions: uploadRecord.dimensions,
+        mimeType: uploadRecord.mime_type,
+        validation: validationResult
+      }
+    }
+  } catch (err: any) {
+    const errorCode = err.message || 'UPLOAD_FAILED'
+    throw new Error(errorCode)
   }
 }
 

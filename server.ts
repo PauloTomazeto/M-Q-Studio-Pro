@@ -10,9 +10,9 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-async function startServer() {
+// Create Express app for both local and Vercel deployment
+async function createApp() {
   const app = express();
-  const PORT = 3000;
 
   app.use(express.json({ limit: '50mb' }));
 
@@ -50,6 +50,10 @@ async function startServer() {
       console.log(`[KIE Proxy] START ${req.method} ${subPath}`);
       console.log(`[KIE Proxy] Body size: ${JSON.stringify(req.body).length} bytes`);
 
+      // Vercel has 60s timeout for normal functions (900s for Pro)
+      // Set axios timeout slightly less than Vercel limit
+      const timeout = process.env.VERCEL === '1' ? 55000 : 180000;
+
       const response = await axios({
         method: req.method,
         url: targetUrl,
@@ -60,7 +64,7 @@ async function startServer() {
           "x-api-key": apiKey,
           "Content-Type": "application/json"
         },
-        timeout: 180000 // Increased to 180s for very slow responses
+        timeout
       });
 
       const duration = Date.now() - startTime;
@@ -117,9 +121,40 @@ async function startServer() {
     });
   }
 
+  return app;
+}
+
+// Store app instance for reuse
+let appInstance: any = null;
+
+// Get or create app instance
+async function getApp() {
+  if (!appInstance) {
+    appInstance = await createApp();
+  }
+  return appInstance;
+}
+
+// Export for Vercel Serverless Functions
+export default (req: any, res: any) => {
+  getApp().then(app => app(req, res)).catch((err: any) => {
+    console.error('App initialization error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
+  });
+};
+
+// Local development server
+async function startServer() {
+  const app = await createApp();
+  const PORT = process.env.PORT || 3000;
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`🚀 Server running on http://localhost:${PORT}`);
+    console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`🔗 Vercel: ${process.env.VERCEL === '1' ? 'Yes' : 'No'}`);
   });
 }
 
-startServer();
+// Only start local server if running directly (not imported)
+if (import.meta.url === `file://${process.argv[1]}`) {
+  startServer().catch(console.error);
+}

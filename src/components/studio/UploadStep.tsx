@@ -163,8 +163,9 @@ const UploadStep: React.FC = () => {
     try {
       // 1. Convert to Base64 immediately for diagnosis (Compressed for speed)
       console.log('Compressing image for diagnosis...');
+      setUploadProgress(5);
       const diagnosisBlob = await compressImage(file, 0.8, 1600);
-      
+
       console.log('Converting to Base64 for immediate diagnosis...');
       const reader = new FileReader();
       const base64 = await new Promise<string>((resolve, reject) => {
@@ -173,19 +174,38 @@ const UploadStep: React.FC = () => {
         reader.readAsDataURL(diagnosisBlob);
       });
       setBase64Image(base64);
+      setUploadProgress(15);
 
-      // 2. Start upload process (Non-blocking background upload)
-      console.log('Calling uploadImage service (Background)...');
-      const result = await uploadImage(file, validationResult, base64);
+      // 2. Start upload process with progress tracking
+      console.log('Calling uploadImage service with progress tracking...');
+      const result = await uploadImage(file, validationResult, base64, (progress) => {
+        console.log('Upload progress:', progress);
+        setUploadProgress(15 + (progress * 0.85)); // Map 0-100 to 15-100
+      });
 
-      console.log('Upload initiated in background, result:', result);
+      console.log('Upload completed successfully, result:', result);
       setImage(preview, result.metadata);
       setSessionId(result.sessionId);
-      console.log('Transitioning to diagnosis step immediately...');
+      setUploadProgress(100);
+      console.log('Transitioning to diagnosis step...');
       setStep('diagnosis');
     } catch (err: any) {
       console.error('Upload Process Error:', err);
-      setError(`Falha ao iniciar processamento: ${err.message}`);
+
+      // Map error codes to user-friendly messages
+      const errorMessages: Record<string, string> = {
+        'AUTH_REQUIRED': 'Você precisa estar logado para fazer upload.',
+        'UPLOAD_TIMEOUT': 'O upload demorou muito tempo. Verifique sua conexão e tente novamente.',
+        'CORS_ERROR': 'Erro de conexão com o servidor. Verifique sua conexão de rede.',
+        'FIRESTORE_WRITE_TIMEOUT': 'Falha ao salvar metadados. Tente novamente.',
+        'UPLOAD_FAILED': 'Falha ao enviar arquivo. Tente novamente.'
+      };
+
+      const errorCode = err.message || 'UPLOAD_FAILED';
+      const errorMessage = errorMessages[errorCode] || `Falha ao processar: ${err.message}`;
+
+      setError(errorMessage);
+      setUploadProgress(0);
     } finally {
       setIsUploading(false);
     }

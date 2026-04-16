@@ -268,16 +268,74 @@ export function onAuthStateChange(callback: (user: any) => void) {
   return data.subscription.unsubscribe
 }
 
-export async function uploadFile(bucket: string, path: string, file: File) {
-  const { data, error } = await supabase.storage
-    .from(bucket)
-    .upload(path, file, {
-      cacheControl: '3600',
-      upsert: false
-    })
+export async function uploadFile(bucket: string, path: string, file: File, maxRetries = 3) {
+  let lastError: any
 
-  if (error) throw error
-  return data
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      // Create abort controller with 60s timeout
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 60000)
+
+      const { data, error } = await supabase.storage
+        .from(bucket)
+        .upload(path, file, {
+          cacheControl: '3600',
+          upsert: false,
+          // Note: Supabase JS client doesn't expose AbortSignal directly,
+          // but we catch timeout errors below
+        })
+
+      clearTimeout(timeout)
+
+      if (error) {
+        lastError = error
+
+        // Retry on network/timeout errors
+        if (
+          attempt < maxRetries &&
+          (error.message?.includes('Failed to fetch') ||
+            error.message?.includes('timeout') ||
+            error.message?.includes('Network') ||
+            error.message?.includes('CORS'))
+        ) {
+          console.warn(`Upload attempt ${attempt + 1} failed, retrying...`, error.message)
+          // Exponential backoff: 1s, 2s, 4s
+          await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000))
+          continue
+        }
+
+        throw error
+      }
+
+      clearTimeout(timeout)
+      return data
+    } catch (err: any) {
+      lastError = err
+
+      // Don't retry authentication or validation errors
+      if (
+        err.message?.includes('401') ||
+        err.message?.includes('403') ||
+        err.message?.includes('invalid') ||
+        err.message?.includes('not found')
+      ) {
+        throw err
+      }
+
+      if (attempt < maxRetries) {
+        console.warn(`Upload attempt ${attempt + 1} failed, retrying...`, err.message)
+        await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000))
+      }
+    }
+  }
+
+  // After all retries failed
+  if (lastError?.message?.includes('CORS') || lastError?.message?.includes('Failed to fetch')) {
+    throw new Error('CORS_ERROR: Unable to connect to storage server. Check VITE_STORAGE_BUCKET_NAME and Supabase CORS settings.')
+  }
+
+  throw lastError || new Error('Upload failed after multiple attempts')
 }
 
 export async function downloadFile(bucket: string, path: string) {
