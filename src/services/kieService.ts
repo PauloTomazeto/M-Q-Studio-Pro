@@ -172,6 +172,109 @@ export async function getKIEGenerationHistory(limit: number = 50) {
 }
 
 // ============================================================
+// DIAGNOSE IMAGE (GPT 5.4 Vision)
+// ============================================================
+
+interface DiagnoseImageRequest {
+  imageBase64: string
+  sessionId: string
+}
+
+interface DiagnoseImageResponse {
+  success: boolean
+  data?: any
+  error?: string
+}
+
+export async function diagnoseImage(
+  imageBase64: string,
+  sessionId: string
+): Promise<any> {
+  const MODEL = 'gpt-5.4'
+  
+  const systemPrompt = `You are an expert architectural analysis AI. Analyze the provided image and return a detailed JSON structure with:
+
+1. **typology**: The architectural type (fachada, planta, perspectiva, Landscape, etc.)
+2. **isFloorPlan**: Boolean - true if this is a floor plan/architectural drawing
+3. **floors**: Number of floors detected
+4. **materials**: Array of detected materials (name, color, reflectance percentage, compatibility)
+5. **light**: Object with { period, temp_k, quality, dominant_source }
+6. **lightPoints**: Array of detected light sources
+7. **cameraData**: Object with { height_m, distance_m, focal_apparent }
+8. **confidence**: Object with percentages for general, materials, camera, light, context, composition, lighting_quality, photorealism, technical_accuracy
+9. **volumes**: Array of detected volumes with id, forma_geometrica, posicao_relativa, proporcao_H_x_L, relacao_com_volume_anterior, dominant
+10. **openings**: Array of openings (janelas, portas) with tipo_abertura, material_perfil, tipo_vidro, proporcao_H_L, posicao_na_fachada, quantidade_e_ritmo
+11. **structural_highlights**: Array with tipo, material, dimensao, acabamento
+12. **ambientes**: Array of rooms (only for floor plans) with id, nome, tipo, area_m2, equipamentos_fixos, veiculos
+13. **plantaType**: If floor plan, the type (residencial, comercial, etc.)
+
+Return ONLY valid JSON. No markdown, no explanations.`
+
+  try {
+    const response = await fetch(`${KIE_API_URL}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${KIE_API_KEY}`
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: systemPrompt
+              },
+              {
+                type: 'image_url',
+                image_url: {
+                  url: imageBase64
+                }
+              }
+            ]
+          }
+        ],
+        temperature: 0.3,
+        max_tokens: 4000
+      })
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}))
+      throw new Error(`GPT 5.4 API error: ${errorData.message || response.statusText}`)
+    }
+
+    const data = await response.json()
+    const content = data.choices?.[0]?.message?.content
+    
+    if (!content) {
+      throw new Error('Empty response from GPT 5.4')
+    }
+
+    // Parse JSON from response
+    let jsonStr = content.trim()
+    // Remove markdown code blocks if present
+    if (jsonStr.startsWith('```json')) {
+      jsonStr = jsonStr.slice(7)
+    } else if (jsonStr.startsWith('```')) {
+      jsonStr = jsonStr.slice(3)
+    }
+    if (jsonStr.endsWith('```')) {
+      jsonStr = jsonStr.slice(0, -3)
+    }
+    
+    const parsed = JSON.parse(jsonStr.trim())
+    return parsed
+
+  } catch (error: any) {
+    console.error('diagnoseImage error:', error)
+    throw new Error(`diagnoseImage failed: ${error.message}`)
+  }
+}
+
+// ============================================================
 // ESTIMATE COST
 // ============================================================
 
