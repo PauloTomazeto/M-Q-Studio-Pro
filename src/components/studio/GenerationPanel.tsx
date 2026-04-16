@@ -3,7 +3,7 @@ import { useStudioStore } from '../../store/studioStore';
 import { useCredits } from '../../hooks/useCredits';
 import { Loader2, Download, Eye, ExternalLink, Share2, AlertTriangle, Play, Save, Check, RotateCcw } from 'lucide-react';
 import { motion } from 'framer-motion';
-import { imageGenerationService } from '../../services/imageGenerationService';
+import imageGenerationService from '../../services/imageGenerationService';
 import { ImageGeneration, GenerationResolution } from '../../types/studio';
 
 export const GenerationPanel: React.FC = () => {
@@ -47,17 +47,15 @@ export const GenerationPanel: React.FC = () => {
   useEffect(() => {
     let unsubscribe: () => void;
     if (generationTask?.image_generation_id && !generationTask.is_completed) {
-      import('../../services/imageGenerationService').then(({ imageGenerationService }) => {
-        unsubscribe = imageGenerationService.subscribeToGeneration(
-          generationTask.image_generation_id,
-          (updatedTask) => {
-            setGenerationTask(updatedTask);
-            if (updatedTask.is_completed || updatedTask.generation_status === 'failed') {
-              setIsGenerating(false);
-            }
+      unsubscribe = imageGenerationService.subscribeToGeneration(
+        generationTask.image_generation_id,
+        (updatedTask) => {
+          setGenerationTask(updatedTask);
+          if (updatedTask.is_completed || updatedTask.generation_status === 'failed') {
+            setIsGenerating(false);
           }
-        );
-      });
+        }
+      );
     }
     return () => {
       if (unsubscribe) unsubscribe();
@@ -91,7 +89,6 @@ export const GenerationPanel: React.FC = () => {
       setIsGenerating(true);
       setIsSaved(false);
       
-      const { imageGenerationService } = await import('../../services/imageGenerationService');
       const genId = await imageGenerationService.startGeneration(
         promptId,
         promptContent,
@@ -143,7 +140,6 @@ export const GenerationPanel: React.FC = () => {
   const handleSaveGeneration = async () => {
     if (!generationTask?.image_generation_id) return;
     try {
-      const { imageGenerationService } = await import('../../services/imageGenerationService');
       await imageGenerationService.toggleFavorite(generationTask.image_generation_id, true);
       setIsSaved(true);
     } catch (err) {

@@ -8,6 +8,19 @@ import { supabase, getCurrentUser } from '../supabase';
 // import { doc, updateDoc, increment } from 'firebase/firestore'; // Migrated to Supabase
 import confetti from 'canvas-confetti';
 
+interface PlanConfig {
+  id: string;
+  name: string;
+  price: number;
+  credits: number;
+}
+
+interface CreditPackageConfig {
+  id: string;
+  price: number;
+  amount: number;
+}
+
 const PricingPage: React.FC = () => {
   const { setUserPlan, setUserCredits, userCredits } = useStudioStore();
   const [plans, setPlans] = useState<PlanConfig[]>([]);

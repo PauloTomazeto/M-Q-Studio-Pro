@@ -221,20 +221,12 @@ export async function getUserFavoritePrompts(userId: string) {
   return data
 }
 
-export default {
+const promptService = {
   createPrompt,
   getPrompt,
   getUserPrompts,
   updatePrompt,
-  updatePromptVisibility,
-  deletePrompt,
-  getPromptVersions,
-  getPromptVersion,
-  restorePromptVersion,
-  sharePrompt,
-  unsharePrompt,
-  getSharedPrompts,
-  favoritePrompt,
-  unfavoritePrompt,
-  getUserFavoritePrompts
-}
+  updatePromptVisibility
+};
+
+export default promptService;

@@ -100,17 +100,14 @@ export async function updateGenerationProgress(generationId: string, progress: n
 export async function completeGeneration(
   generationId: string,
   imageUrl: string,
-  kieApiModel?: string,
-  kieApiRequestId?: string
+  updates?: Partial<ImageGeneration>
 ) {
   return updateGenerationStatus(generationId, 'completed', {
     image_url: imageUrl,
     image_urls: [imageUrl],
-    kie_api_model: kieApiModel,
-    kie_api_request_id: kieApiRequestId,
     progress_percentage: 100,
     completed_at: new Date().toISOString(),
-    credits_deducted: true
+    ...updates
   } as any)
 }
 
@@ -123,6 +120,9 @@ export async function failGeneration(
     progress_percentage: 0
   } as any)
 }
+
+export const completeWithUrl = completeGeneration;
+export const fail = (id: string, message: string) => updateGenerationStatus(id, 'failed', { error_message: message } as any);
 
 // ============================================================
 // GENERATION QUERIES
@@ -212,7 +212,69 @@ export async function deleteGeneration(generationId: string) {
   if (error) throw error
 }
 
-export default {
+// COMPATIBILITY METHODS
+export function subscribeToGeneration(taskId: string, callback: (task: any) => void) {
+  const channel = supabase
+    .channel(`generation-${taskId}`)
+    .on(
+      'postgres_changes',
+      {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'image_generations',
+        filter: `image_generation_id=eq.${taskId}`
+      },
+      (payload) => {
+        callback(payload.new);
+      }
+    )
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}
+
+export async function startGeneration(
+  promptId: string,
+  content: string,
+  resolution: string,
+  cost: number,
+  aspectRatio: string
+) {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('AUTH_REQUIRED');
+
+  const { data, error } = await supabase
+    .from('image_generations')
+    .insert([{
+      user_id: user.id,
+      prompt_config_id: promptId,
+      prompt_content: content,
+      current_resolution: resolution,
+      credits_cost: cost,
+      aspect_ratio: aspectRatio,
+      generation_status: 'queued',
+      progress_percentage: 0,
+      created_at: new Date().toISOString()
+    }])
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data.id;
+}
+
+export async function toggleFavorite(taskId: string, isFavorite: boolean) {
+  const { error } = await supabase
+    .from('image_generations')
+    .update({ is_favorite: isFavorite })
+    .eq('image_generation_id', taskId);
+
+  if (error) throw error;
+}
+
+const imageGenerationService = {
   createGeneration,
   getGeneration,
   getUserGenerations,
@@ -220,10 +282,11 @@ export default {
   updateGenerationStatus,
   updateGenerationProgress,
   completeGeneration,
-  failGeneration,
-  getGenerationsByStatus,
-  getPendingGenerations,
-  getRecentGenerations,
-  getUserGenerationStats,
-  deleteGeneration
-}
+  subscribeToGeneration,
+  startGeneration,
+  toggleFavorite,
+  completeWithUrl,
+  fail
+};
+
+export default imageGenerationService;

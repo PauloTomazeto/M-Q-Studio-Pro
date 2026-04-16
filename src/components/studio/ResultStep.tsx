@@ -2,9 +2,9 @@ import React, { useEffect, useState, useRef } from 'react';
 import { useStudioStore } from '../../store/studioStore';
 import kieService from '../../services/kieService';
 import { useCredits } from '../../hooks/useCredits';
-import { uploadTempImage, compressImage } from '../../services/storageService';
+import storageService, { uploadTempImage, compressImage } from '../../services/storageService';
+import promptService from '../../services/promptService';
 import { supabase, getCurrentUser } from '../../supabase';
-// import { doc, updateDoc, onSnapshot } from 'firebase/firestore'; // Migrated to Supabase
 import { 
   Loader2, Copy, Check, Edit3, Wand2, ArrowRight, Star, RotateCcw,
   Save, X
@@ -48,11 +48,12 @@ const ResultStep: React.FC = () => {
   const [isEditing, setIsEditing] = useState(false);
   const [editedText, setEditedText] = useState('');
   const [isFavorite, setIsFavorite] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
-  const [projectName, setProjectName] = useState('');
+  const [error, setError] = useState<string | null>(null);
   const [isSavingProject, setIsSavingProject] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [projectName, setProjectName] = useState('');
+  const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   const getActivePrompt = () => {
     if (configParams.promptMode === 'single') return prompt || generatedPrompt;
@@ -159,7 +160,7 @@ const ResultStep: React.FC = () => {
       });
     } catch (err) {
       console.error('Failed to save project:', err);
-      handleFirestoreError(err, OperationType.WRITE, 'projects');
+      // Removed handleFirestoreError reference
     } finally {
       setIsSavingProject(false);
     }
@@ -183,12 +184,10 @@ const ResultStep: React.FC = () => {
     }
   };
 
-  const generate = async () => {
-    setStatus('loading');
-    setIsModeLocked(true);
+  const handleRegenerate = async () => {
     try {
-      // Prompt generation is now free as per user request
-      // const hasCredits = await consumeCredits(0, 'prompt_generation'); 
+      setStatus('loading');
+      setError(null);
       
       const updatedScanResult = {
         ...scanResult,
@@ -199,71 +198,29 @@ const ResultStep: React.FC = () => {
 
       const result = await kieService.generatePrompt(updatedScanResult, configParams, configParams.promptMode);
       
-      let savedId = '';
       if (configParams.promptMode === 'single') {
-        setPrompt(result.content);
-        setGeneratedPrompt(result.content);
-        setQualityScore(result.qualityScore);
-        setQualityBreakdown(result.qualityBreakdown);
-        setBlocks(null);
-        setGeneratedBlocks(null);
-
-        // Save to Firestore
-        import('../../services/promptService').then(async ({ promptService }) => {
-          savedId = await promptService.saveGeneratedPrompt({
-            content: result.content,
-            qualityScore: result.qualityScore,
-            qualityBreakdown: result.qualityBreakdown,
-            promptMode: 'single',
-            isAiGenerated: true,
-            promptSource: 'gemini_ai'
-          });
-          setPromptId(savedId);
-        });
+        setPrompt(result.prompt);
+        setGeneratedPrompt(result.prompt);
       } else {
         setBlocks(result.blocks);
         setGeneratedBlocks(result.blocks);
-        setQualityScore(result.overall_quality_score);
-        setQualityBreakdown(result.overall_quality_breakdown);
-        setPrompt(null);
-        setGeneratedPrompt(null);
-
-        // Save to Firestore
-        import('../../services/promptService').then(async ({ promptService }) => {
-          savedId = await promptService.saveGeneratedPrompt({
-            content: result.blocks.map((b: any) => b.content).join('\n\n'),
-            qualityScore: result.overall_quality_score,
-            qualityBreakdown: result.overall_quality_breakdown,
-            promptMode: 'blocks',
-            isAiGenerated: true,
-            promptSource: 'gemini_ai'
-          });
-          setPromptId(savedId);
-        });
       }
       
       setStatus('success');
-      setIsModeLocked(false);
-      confetti({
-        particleCount: 100,
-        spread: 70,
-        origin: { y: 0.6 },
-        colors: ['#0066FF', '#7C3AED', '#10B981']
-      });
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      console.error('Regenerate error:', err);
+      setError(err.message || 'Erro ao gerar prompt.');
       setStatus('error');
-      setIsModeLocked(false);
     }
   };
 
+  const generate = handleRegenerate; // Alias for button onClick
+
   useEffect(() => {
-    if (configParams.promptMode === 'single' && !generatedPrompt) {
-      generate();
-    } else if (configParams.promptMode === 'blocks' && (!generatedBlocks || generatedBlocks.length === 0)) {
-      generate();
+    if (!prompt && !blocks) {
+      handleRegenerate();
     }
-  }, [configParams.promptMode]);
+  }, []);
 
   const handleSaveEdit = async () => {
     setIsSaving(true);
@@ -272,7 +229,7 @@ const ResultStep: React.FC = () => {
         setPrompt(editedText);
         setGeneratedPrompt(editedText);
         if (promptId) {
-          const { promptService } = await import('../../services/promptService');
+          const { default: promptService } = await import('../../services/promptService');
           await promptService.updatePrompt(promptId, editedText);
         }
       } else if (blocks) {
@@ -281,7 +238,7 @@ const ResultStep: React.FC = () => {
         setBlocks(newBlocks);
         setGeneratedBlocks(newBlocks);
         if (promptId) {
-          const { promptService } = await import('../../services/promptService');
+          const { default: promptService } = await import('../../services/promptService');
           await promptService.updatePrompt(promptId, newBlocks.map(b => b.content).join('\n\n'));
         }
       }
@@ -296,7 +253,7 @@ const ResultStep: React.FC = () => {
   const handleToggleFavorite = async () => {
     if (!promptId) return;
     try {
-      const { promptService } = await import('../../services/promptService');
+      const { default: promptService } = await import('../../services/promptService');
       await promptService.toggleFavorite(promptId, !isFavorite);
       setIsFavorite(!isFavorite);
     } catch (err) {
@@ -308,7 +265,7 @@ const ResultStep: React.FC = () => {
     navigator.clipboard.writeText(text);
     setCopied(true);
     if (promptId) {
-      const { promptService } = await import('../../services/promptService');
+      const { default: promptService } = await import('../../services/promptService');
       await promptService.incrementCopyCount(promptId);
     }
     setTimeout(() => setCopied(false), 2000);

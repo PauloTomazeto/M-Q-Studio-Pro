@@ -25,11 +25,31 @@ import {
   Image as ImageIcon,
   Loader2
 } from 'lucide-react';
-// import { adminService TODO
-// import { usageService TODO
+import adminService from '../services/adminService';
+import usageService from '../services/usageService';
 import { supabase } from '../supabase';
 import { useNavigate } from 'react-router-dom';
 import { Coins } from 'lucide-react';
+
+interface UserStats {
+  totalUsers: number;
+  totalCredits: number;
+  totalGenerations: number;
+  activeUsers: number;
+}
+
+interface PlanConfig {
+  id: string;
+  name: string;
+  price: number;
+  credits: number;
+}
+
+interface CreditPackageConfig {
+  id: string;
+  price: number;
+  amount: number;
+}
 
 const ADMIN_EMAILS = [
   "paulosilvatomazeto@gmail.com",

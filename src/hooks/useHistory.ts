@@ -19,6 +19,7 @@ interface UseHistoryOptions {
 
 interface UseHistoryReturns {
   generations: ImageGeneration[]
+  history: ImageGeneration[]
   loading: boolean
   error: Error | null
   refetch: () => Promise<void>
@@ -73,8 +74,34 @@ export function useHistory(options: UseHistoryOptions = {}): UseHistoryReturns {
   }, [limit, projectId, status])
 
   useEffect(() => {
-    // Fetch initial history
-    fetchHistory()
+    let subscription: any;
+
+    const setupSubscription = async () => {
+      const user = await getCurrentUser()
+      if (!user) return
+
+      const channel = supabase
+        .channel('user-generations')
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'image_generations',
+            filter: projectId
+              ? `project_id=eq.${projectId}`
+              : `user_id=eq.${user.id}`
+          },
+          () => {
+            fetchHistory()
+          }
+        )
+        .subscribe()
+      
+      subscription = channel;
+    };
+
+    setupSubscription();
 
     // Set up auto-refresh if enabled
     let refreshTimer: NodeJS.Timeout | undefined
@@ -84,32 +111,6 @@ export function useHistory(options: UseHistoryOptions = {}): UseHistoryReturns {
         fetchHistory()
       }, refreshInterval)
     }
-
-    // Subscribe to real-time updates
-    const user = getCurrentUser()
-    if (!user) return
-
-    const filters = projectId
-      ? { project_id: `eq.${projectId}` }
-      : { user_id: `eq.${user.id}` }
-
-    const subscription = supabase
-      .channel('user-generations')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'image_generations',
-          filter: Object.entries(filters)
-            .map(([key, value]) => `${key}=${value}`)
-            .join(',')
-        },
-        (payload) => {
-          handleRealtimeUpdate(payload)
-        }
-      )
-      .subscribe()
 
     return () => {
       subscription.unsubscribe()
@@ -177,12 +178,13 @@ export function useHistory(options: UseHistoryOptions = {}): UseHistoryReturns {
 
   return {
     generations,
+    history: generations, // Adicionado alias para compatibilidade
     loading,
     error,
     refetch: fetchHistory,
-    addGeneration,
-    updateGeneration,
-    deleteGeneration,
-    clearHistory
-  }
+    addGeneration: (g) => setGenerations(prev => [g, ...prev]),
+    updateGeneration: (id, updates) => setGenerations(prev => prev.map(g => g.id === id ? { ...g, ...updates } : g)),
+    deleteGeneration: (id) => setGenerations(prev => prev.filter(g => g.id !== id)),
+    clearHistory: async () => setGenerations([])
+  } as any
 }

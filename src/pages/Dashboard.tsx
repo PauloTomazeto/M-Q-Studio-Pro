@@ -133,9 +133,9 @@ const Dashboard: React.FC = () => {
                     <History size={20} />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <h4 className="font-bold truncate capitalize">{item.scanData.typology} Analysis</h4>
+                    <h4 className="font-bold truncate capitalize">{item.scanData?.typology || 'Análise'} Analysis</h4>
                     <p className="text-xs text-neutral-500 flex items-center gap-2">
-                      {new Date(item.createdAt).toLocaleDateString()} • {item.scanData.confidence.general}% Confiança
+                      {new Date(item.created_at || Date.now()).toLocaleDateString()} • {item.scanData?.confidence?.general || 0}% Confiança
                     </p>
                   </div>
                   <ChevronRight size={18} className="text-neutral-300 group-hover:text-[#cfa697] transition-colors" />

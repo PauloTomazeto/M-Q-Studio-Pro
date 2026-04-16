@@ -431,21 +431,33 @@ async function getImageDimensions(file: File): Promise<Record<string, any> | nul
   })
 }
 
-export default {
-  uploadImage,
-  createImageUpload,
-  getImageUpload,
-  getUserUploads,
-  getUploadBySha256,
-  recordFileDeduplication,
-  incrementFileReuse,
-  getUserUploadQuota,
-  checkUploadQuota,
-  createUserUploadQuota,
-  incrementUploadCount,
-  hasUploadQuotaAvailable,
-  deleteUpload,
-  getUploadUrl,
-  validateFileChain,
-  compressImage
+/**
+ * Alias para compatibilidade com componentes antigos
+ */
+export async function uploadTempImage(file: File | Blob, userId: string) {
+  const fileName = `${userId}/temp/${Date.now()}-${Math.random().toString(36).substring(7)}.jpg`
+  
+  const { data, error } = await supabase.storage
+    .from('temp-assets')
+    .upload(fileName, file, {
+      cacheControl: '3600',
+      upsert: true
+    })
+
+  if (error) throw error
+
+  const { data: { publicUrl } } = supabase.storage
+    .from('temp-assets')
+    .getPublicUrl(fileName)
+
+  return { url: publicUrl }
 }
+
+const storageService = {
+  validateImage,
+  compressImage,
+  uploadImage,
+  uploadTempImage
+}
+
+export default storageService;

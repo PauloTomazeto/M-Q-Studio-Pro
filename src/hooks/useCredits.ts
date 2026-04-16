@@ -19,12 +19,15 @@ export interface UserCredits {
 }
 
 interface UseCreditReturns {
-  credits: UserCredits | null
+  credits: number | null // Alterado para number para compatibilidade
+  creditObject: UserCredits | null // Adicionado para manter o objeto original se necessário
   loading: boolean
   error: Error | null
   refetch: () => Promise<void>
   debit: (amount: number, reason: string) => Promise<boolean>
   credit: (amount: number, reason: string) => Promise<boolean>
+  consumeCredits: (amount: number, reason: string) => Promise<boolean> // Alias
+  refundCredits: (amount: number, reason: string) => Promise<boolean> // Alias
   hasEnough: (amount: number) => boolean
   userProfile: any | null
   logModeSelection: (mode: string) => Promise<void>
@@ -78,6 +81,30 @@ export function useCredits(): UseCreditReturns {
       setLoading(false)
     }
   }, [])
+
+  const consumeCredits = useCallback(async (amount: number, reason: string) => {
+    try {
+      const user = await getCurrentUser()
+      if (!user) return false
+      await creditsService.debitCredits(user.id, amount, reason)
+      await fetchCredits()
+      return true
+    } catch (e) {
+      return false
+    }
+  }, [fetchCredits])
+
+  const refundCredits = useCallback(async (amount: number, reason: string) => {
+    try {
+      const user = await getCurrentUser()
+      if (!user) return false
+      await creditsService.creditCredits(user.id, amount, reason)
+      await fetchCredits()
+      return true
+    } catch (e) {
+      return false
+    }
+  }, [fetchCredits])
 
   const logModeSelection = useCallback(async (mode: string) => {
     console.log(`[useCredits] Modo selecionado: ${mode}`);
@@ -181,14 +208,17 @@ export function useCredits(): UseCreditReturns {
   )
 
   return {
-    credits,
-    userProfile,
-    logModeSelection,
+    credits: credits?.credits_available ?? 0,
+    creditObject: credits,
     loading,
     error,
     refetch: fetchCredits,
-    debit,
-    credit,
-    hasEnough
+    debit: creditsService.debitCredits as any,
+    credit: creditsService.creditCredits as any,
+    consumeCredits,
+    refundCredits,
+    hasEnough: (amount: number) => (credits?.credits_available ?? 0) >= amount,
+    userProfile,
+    logModeSelection
   }
 }

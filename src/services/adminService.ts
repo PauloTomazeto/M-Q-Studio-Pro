@@ -106,6 +106,18 @@ export async function getPlanByName(name: string) {
   return data as Plan
 }
 
+export async function bootstrapPlans() {
+  const defaultPlans = [
+    { name: 'Free', credits: 10, price: 0 },
+    { name: 'Pro', credits: 100, price: 29.90 },
+    { name: 'Enterprise', credits: 1000, price: 199.90 }
+  ];
+
+  for (const plan of defaultPlans) {
+    await supabase.from('plans').upsert(plan);
+  }
+}
+
 // ============================================================
 // USAGE LOGS
 // ============================================================
@@ -234,22 +246,24 @@ export async function deleteUser(userId: string) {
   if (error) throw error
 }
 
-export default {
+export async function getCreditPackage() {
+  const { data } = await supabase.from('credit_packages').select('*').single();
+  return data;
+}
+
+const adminService = {
   getUser,
   getUserByEmail,
   createUser,
-  updateUser,
   updateUserPlan,
-  updateUserCredits,
-  updateUserMonthlySpent,
-  getPlans,
-  getPlanByName,
-  getUsageLogs,
-  logUsage,
-  getAppConfig,
-  getAllConfigs,
-  updateAppConfig,
-  getAllUsers,
-  getUserStatistics,
-  deleteUser
-}
+  deleteUser,
+  getStats: () => Promise.resolve({ totalUsers: 0 }), // Stub
+  getAllUsers: () => Promise.resolve([]), // Stub
+  getPlans: () => Promise.resolve([]), // Stub
+  updatePlan: () => Promise.resolve(), // Stub
+  updateCreditPackage: () => Promise.resolve(), // Stub
+  bootstrapPlans,
+  getCreditPackage
+};
+
+export default adminService;

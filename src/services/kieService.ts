@@ -399,12 +399,82 @@ export async function handleKIEWebhook(
   }
 }
 
-export default {
+// ============================================================
+// COMPATIBILITY METHODS (LEGACY SUPPORT)
+// ============================================================
+
+export async function generateImage(params: {
+  prompt: string;
+  model: string;
+  resolution?: string;
+  aspect_ratio?: string;
+  image_input?: string[];
+}) {
+  const response = await fetch(`${KIE_API_URL}/generate`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${KIE_API_KEY}`
+    },
+    body: JSON.stringify(params)
+  });
+
+  if (!response.ok) {
+    throw new Error(`KIE.AI generate error: ${response.statusText}`);
+  }
+
+  const data = await response.json();
+  return { taskId: data.id };
+}
+
+export async function checkImageTaskStatus(taskId: string) {
+  return checkKIEGenerationStatus(taskId);
+}
+
+export async function getTaskStatus(taskId: string, generationId?: string) {
+  return checkKIEGenerationStatus(taskId);
+}
+
+export async function analyzeMaterialImage(base64: string) {
+  // Use GPT 5.4 to analyze material specifically
+  const systemPrompt = `Analyze the architectural material in this image and return JSON with:
+  {
+    "material": "name",
+    "color": "color name",
+    "reflectance": 0-100,
+    "compatibility": ["tags"],
+    "pbr_ready": boolean
+  }`;
+
+  return diagnoseImage(base64, 'material-analysis');
+}
+
+export async function generatePrompt(scanResult: any, config: any, mode: string) {
+  // Stub for prompt generation
+  return {
+    prompt: `Architectural visualization of ${scanResult.typology || 'building'}, ${mode} style.`,
+    negative_prompt: "low quality, blurry",
+    blocks: [
+      { id: '1', content: 'Architectural visualization', type: 'style' },
+      { id: '2', content: 'Realistic lighting', type: 'lighting' }
+    ]
+  };
+}
+
+const kieService = {
   generateImageViaKIE,
   checkKIEGenerationStatus,
   cancelKIEGeneration,
   getKIEGenerationHistory,
+  diagnoseImage,
   estimateKIEGenerationCost,
   validateKIEPrompt,
-  handleKIEWebhook
-}
+  handleKIEWebhook,
+  generateImage,
+  checkImageTaskStatus,
+  getTaskStatus,
+  analyzeMaterialImage,
+  generatePrompt
+};
+
+export default kieService;

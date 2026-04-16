@@ -2,10 +2,9 @@ import React, { useEffect, useState, useRef } from 'react';
 import { useStudioStore } from '../../store/studioStore';
 import { useCredits } from '../../hooks/useCredits';
 import kieService from '../../services/kieService';
-import { uploadTempImage, compressImage } from '../../services/storageService';
-import { imageGenerationService } from '../../services/imageGenerationService';
+import storageService, { uploadTempImage, compressImage } from '../../services/storageService';
+import imageGenerationService from '../../services/imageGenerationService';
 import { supabase, getCurrentUser } from '../../supabase';
-// import { doc, updateDoc, setDoc } from 'firebase/firestore'; // Migrated to Supabase
 import { 
   Loader2, Download, Share2, CheckCircle2, AlertCircle, 
   Image as ImageIcon, RefreshCw, Maximize2, Monitor, 
@@ -174,7 +173,7 @@ const GenerationStep: React.FC = () => {
       }
 
       // 3. Call KIE API
-      const apiResponse = await kieService.generateImage({
+      const apiResponse: any = await kieService.generateImage({
         prompt: activePrompt,
         model: selectedModel,
         resolution: selectedResolution,
@@ -256,7 +255,7 @@ const GenerationStep: React.FC = () => {
         if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
         pollingIntervalRef.current = setInterval(async () => {
           try {
-            const pollResponse = await kieService.checkImageTaskStatus(taskId);
+            const pollResponse: any = await kieService.checkImageTaskStatus(taskId);
             const data = pollResponse.data || pollResponse;
             
             // Extract completion status or result URLs

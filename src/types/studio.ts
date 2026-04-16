@@ -334,4 +334,5 @@ export interface ImageGeneration {
   started_at: string | null;
   completed_at: string | null;
   is_favorite?: boolean;
+  scanData?: any; // Adicionado para compatibilidade
 }

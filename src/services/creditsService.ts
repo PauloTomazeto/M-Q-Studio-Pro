@@ -109,6 +109,10 @@ export async function getAuditLogByReference(referenceId: string) {
   return data as CreditAuditLog
 }
 
+// Aliases para compatibilidade
+export const debitCredits = debitCreditsRPC;
+export const creditCredits = creditCreditsRPC;
+
 // ============================================================
 // CREDIT TRANSACTIONS
 // ============================================================

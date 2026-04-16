@@ -231,4 +231,17 @@ export function getSecretsManager(): SecretsManager {
 
 export const secretsManager = getSecretsManager()
 
-export default secretsManager
+export function getSecrets() {
+  return {
+    SUPABASE_URL: import.meta.env.VITE_SUPABASE_URL,
+    SUPABASE_ANON_KEY: import.meta.env.VITE_SUPABASE_ANON_KEY,
+    KIE_API_KEY: import.meta.env.VITE_KIE_API_KEY || process.env.KIE_API_KEY,
+    KIE_WEBHOOK_SECRET: process.env.KIE_WEBHOOK_SECRET
+  }
+}
+
+const secretsManager = {
+  getSecrets
+}
+
+export default secretsManager;

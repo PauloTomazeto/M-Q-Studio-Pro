@@ -71,43 +71,23 @@ export async function getUsageByType(userId: string, type: string) {
   return data as UsageLog[]
 }
 
-export async function getUsageStats(userId: string, days: number = 30) {
-  const dateFrom = new Date()
-  dateFrom.setDate(dateFrom.getDate() - days)
-
-  const { data, error } = await supabase
-    .from('usage_logs')
-    .select('type')
-    .eq('user_id', userId)
-    .gte('timestamp', dateFrom.toISOString())
-
-  if (error) throw error
-
-  const stats = {
-    total: data?.length || 0,
-    prompt: 0,
-    scan: 0,
-    read: 0,
-    image: 0,
-    video: 0
-  }
-
-  data?.forEach((log: any) => {
-    if (log.type in stats) {
-      stats[log.type as keyof typeof stats]++
-    }
-  })
-
-  return stats
+export async function getLogs(userId?: string, limit: number = 100) {
+  let query = supabase.from('usage_logs').select('*').order('timestamp', { ascending: false }).limit(limit);
+  if (userId) query = query.eq('user_id', userId);
+  
+  const { data, error } = await query;
+  if (error) throw error;
+  return data;
 }
 
-export default {
+const usageService = {
   logPromptUsage,
   logScanUsage,
   logReadUsage,
   logImageGenerationUsage,
   logVideoUsage,
   getUserUsageLogs,
-  getUsageByType,
-  getUsageStats
-}
+  getLogs
+};
+
+export default usageService;
