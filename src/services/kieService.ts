@@ -211,7 +211,7 @@ export async function diagnoseImage(
 Return ONLY valid JSON. No markdown, no explanations.`
 
   try {
-    const response = await fetch(`${KIE_API_URL}/chat/completions`, {
+    const response = await fetch(`${KIE_API_URL}/gpt-5-4/v1/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
