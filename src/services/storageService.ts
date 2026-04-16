@@ -155,7 +155,8 @@ export async function uploadImage(file: File, validationResult: ValidationChainR
   } else {
     // Fazer upload para Supabase Storage
     const filename = `${userId}/${Date.now()}-${file.name}`
-    const data = await uploadFile('user-uploads', filename, file)
+    const bucketName = import.meta.env.VITE_STORAGE_BUCKET_NAME || 'user-uploads'
+    const data = await uploadFile(bucketName, filename, file)
     storagePath = data.path
 
     // Registrar no banco de dados
@@ -352,8 +353,9 @@ export async function hasUploadQuotaAvailable(userId: string) {
 
 export async function deleteUpload(uploadId: string) {
   const upload = await getImageUpload(uploadId)
+  const bucketName = import.meta.env.VITE_STORAGE_BUCKET_NAME || 'user-uploads'
   if (upload.storage_path) {
-    await deleteFile('user-uploads', upload.storage_path)
+    await deleteFile(bucketName, upload.storage_path)
   }
 
   const { error } = await supabase
@@ -365,7 +367,8 @@ export async function deleteUpload(uploadId: string) {
 }
 
 export function getUploadUrl(storagePath: string) {
-  return getPublicFileUrl('user-uploads', storagePath)
+  const bucketName = import.meta.env.VITE_STORAGE_BUCKET_NAME || 'user-uploads'
+  return getPublicFileUrl(bucketName, storagePath)
 }
 
 // ============================================================
